@@ -3,7 +3,9 @@
 # Produces data/golden-corpus-baseline.json (the parity contract for perf work).
 # Usage: golden-snapshot.sh [--out FILE]
 cd "$(dirname "$0")/.." || exit 1
-OUT="${2:-data/golden-corpus-baseline.json}"
+# Parse --out FILE properly (default: data/golden-corpus-baseline.json)
+OUT="data/golden-corpus-baseline.json"
+if [ "$1" = "--out" ] && [ -n "$2" ]; then OUT="$2"; fi
 CORPUS="data/golden-corpus.txt"
 
 cat > /tmp/ichiran-golden.lisp <<EOF
