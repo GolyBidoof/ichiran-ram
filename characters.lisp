@@ -44,6 +44,46 @@
 (defun get-char-class (char)
   (gethash char *char-class-hash* char))
 
+;;; Map a char-class to the set of *char-class-hash* classes whose chars it
+;;; covers (the hash stores concrete classes like :hiragana/:katakana, while
+;;; the regex classes include unions like :kana). Used by the table-driven
+;;; scans (consecutive-char-groups, destem).
+(defparameter *char-class-hash-mapping*
+  '((:kana . (:hiragana :katakana))
+    (:hiragana . (:hiragana))
+    (:katakana . (:katakana))
+    (:katakana-uniq . (:katakana))
+    (:kanji . (:kanji))
+    (:kanji-char . (:kanji))
+    (:number . (:number))
+    (:traditional . (:traditional))
+    (:nonword . (:nonword))))
+
+(declaim (inline char-in-class-p))
+(defun char-in-class-p (char char-class)
+  "True if CHAR is in the given char-class. Fast range/table checks instead
+   of regex (the *char-class-hash* maps kana to syllables, not these
+   classes; kanji/digits aren't in it)."
+  (let ((code (char-code char)))
+    (ecase char-class
+      (:hiragana (<= #x3040 code #x309F))
+      (:katakana (<= #x30A0 code #x30FF))
+      (:kana (or (<= #x3040 code #x309F) (<= #x30A0 code #x30FF)
+                 (<= #x31F0 code #x31FF) ;; katakana phonetic extensions
+                 (char= char #\ー) (char= char #\ﾞ) (char= char #\ﾟ)))
+      (:katakana-uniq (<= #x30A0 code #x30FF))
+      (:kanji (or (<= #x4E00 code #x9FFF)
+                  (<= #x3400 code #x4DBF)
+                  (char= char #\々) (char= char #\〆) (char= char #\〇)))
+      (:kanji-char (or (<= #x4E00 code #x9FFF)
+                       (<= #x3400 code #x4DBF)
+                       (char= char #\々) (char= char #\〇)))
+      (:number (or (<= (char-code #\0) code (char-code #\9))
+                   (<= #xFF10 code #xFF19) ;; fullwidth digits
+                   (char= char #\〇)))
+      (:traditional nil)
+      (:nonword nil))))
+
 (defun long-vowel-modifier-p (modifier prev-char)
   (let ((vowel (getf '(:+a #\A :+i #\I :+u #\U :+e #\E :+o #\O) modifier)))
     (when vowel
@@ -271,11 +311,24 @@
        str))
 
 (defun consecutive-char-groups (char-class str &key (start 0) (end (length str)))
-  (let ((regex (cdr (assoc char-class *char-scanners-inner*)))
-        result)
-    (ppcre:do-matches (s e regex str (nreverse result)
-                         :start start :end end)
-      (push (cons s e) result))))
+  "Return list of (start . end) conses for runs of CHAR-CLASS chars in STR
+   within [start,end). Table-driven (gethash per char) instead of ppcre."
+  (declare (type char-class char-class))
+  (let ((result nil)
+        (run-start nil)
+        (i start))
+    (loop while (< i end)
+          for ch = (char str i)
+          if (char-in-class-p ch char-class)
+            do (unless run-start (setf run-start i))
+               (incf i)
+          else
+            do (when run-start
+                 (push (cons run-start i) result)
+                 (setf run-start nil))
+               (incf i))
+    (when run-start (push (cons run-start i) result))
+    (nreverse result)))
 
 (defun kanji-prefix (word)
   (or
@@ -317,10 +370,16 @@
   "Remove `stem` characters of char-class + whatever else gets in the way from the end of `word`"
   (declare (type char-class char-class))
   (when (= stem 0) (return-from destem word))
-  (let ((regex (cadr (assoc char-class *char-class-regex-mapping*)))
-        pos)
-    (ppcre:do-matches (s e regex word) (push s pos))
-    (let ((tail (nthcdr (1- stem) pos)))
+  ;; Table-driven: collect ALL class-char start positions (like the regex),
+  ;; then take the (stem-1)-th from the end — matching the original
+  ;; (ppcre:do-matches ... push s) + (nthcdr (1- stem) positions).
+  (let* ((len (length word))
+         (positions nil))
+    (loop for i from 0 below len
+          for ch = (char word i)
+          when (char-in-class-p ch char-class)
+            do (push i positions))
+    (let ((tail (nthcdr (1- stem) positions)))
       (if tail (subseq word 0 (car tail)) ""))))
 
 (defun match-diff (s1 s2 &aux (l1 (length s1)) (l2 (length s2)))
