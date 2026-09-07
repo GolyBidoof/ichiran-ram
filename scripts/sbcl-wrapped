@@ -3,22 +3,27 @@
 # - XDG_CACHE_HOME  : fasl cache
 # - QUICKLISP_HOME  : workspace copy local-env/quicklisp
 # - --no-userinit   : suppress ~/.sbclrc (which loads the OLD home quicklisp)
-# SBCL ordering rule (verified): --dynamic-space-size must come FIRST,
-# then --no-userinit, then other runtime opts, then our setup load, then user
-# --eval/--load. We always emit dynamic-space-size ourselves FIRST.
+# SBCL ordering rule (verified): C runtime opts (--dynamic-space-size,
+# --core, --no-userinit) must come FIRST, then Lisp opts (--eval/--load).
+# We emit runtime opts ourselves; a --core implies quicklisp is already in
+# the image, so we skip the setup.lisp load then.
 cd "$(dirname "$0")/.." || exit 1
 export XDG_CACHE_HOME="$PWD/local-env/cache"
 export QUICKLISP_HOME="$PWD/local-env/quicklisp"
 mkdir -p "$XDG_CACHE_HOME" "$QUICKLISP_HOME"
 
-runtime=(--dynamic-space-size 4096 --no-userinit)
+runtime=(--dynamic-space-size 4096)
 rest=()
 user_space=""
+using_core=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dynamic-space-size)
       user_space="$2"; shift 2 ;;   # honor the user's heap request (ours is a default)
-    --core|--control-stack-size|--tls-limit|--memory-fault-error)
+    --core)
+      using_core="$2"
+      runtime+=("--core" "$2"); shift 2 ;;
+    --control-stack-size|--tls-limit|--memory-fault-error)
       runtime+=("$1" "$2"); shift 2 ;;
     --noinform|--non-interactive|--disable-debugger|--quit|--no-sysinit|--no-userinit)
       runtime+=("$1"); shift ;;
@@ -28,6 +33,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# --no-userinit must come AFTER --core (SBCL treats everything after --core
+# as Lisp options); it's a runtime opt only when no core is used.
+if [ -n "$using_core" ]; then
+  runtime+=(--no-userinit)
+fi
+
 # If the user requested a heap size, replace our default (must stay first
 # in the runtime args — SBCL requires --dynamic-space-size before other opts).
 if [ -n "$user_space" ]; then
@@ -35,5 +46,10 @@ if [ -n "$user_space" ]; then
   runtime[1]="$user_space"
 fi
 
-exec /opt/homebrew/bin/sbcl "${runtime[@]}" \
-  --load "$PWD/local-env/quicklisp/setup.lisp" "${rest[@]}"
+if [ -n "$using_core" ]; then
+  # Core image already has quicklisp + the dict; don't load setup.lisp.
+  exec /opt/homebrew/bin/sbcl "${runtime[@]}" "${rest[@]}"
+else
+  exec /opt/homebrew/bin/sbcl "${runtime[@]}" \
+    --no-userinit --load "$PWD/local-env/quicklisp/setup.lisp" "${rest[@]}"
+fi
