@@ -488,13 +488,6 @@
 
 (defun find-word (word &key root-only)
   (when (<= (length word) *max-word-length*)
-    ;; S3: serve kana lookups from the in-memory dict when enabled (avoids
-    ;; the DB for the common kana path). memdict stores real kana-text DAOs.
-    (when (and (not root-only) *memdict-p* (find-package :ichiran/memdict)
-               (test-word word :kana))
-      (let ((mem (funcall (symbol-function (intern "MEMDICT-FIND" (find-package :ichiran/memdict)))
-                          'kana-text word)))
-        (when mem (return-from find-word mem))))
     (multiple-value-bind (inits present-p) (and *substring-hash* (gethash word *substring-hash*))
       (if (and present-p (not root-only))
           ;; The substring-hash fast path stores initarg plists per sentence;
@@ -1121,11 +1114,6 @@
 ;;; surface texts (kanji + kana) with (ichiran/trie:build-trie pairs).
 (defvar *trie-p* nil)
 (defvar *ichiran-trie* nil)
-
-;;; Perf: S3 in-memory dictionary — when enabled (and ichiran/memdict is
-;;; loaded + memdict-load called), find-word serves kana lookups from RAM.
-;;; Default OFF.
-(defvar *memdict-p* nil)
 
 (defun trie-enabled-p ()
   (and *trie-p* (find-package :ichiran/trie)))

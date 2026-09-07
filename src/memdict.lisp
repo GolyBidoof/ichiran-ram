@@ -42,18 +42,21 @@
    cross-sentence. Returns a stats plist."
   (let ((before (sb-kernel:dynamic-usage)))
     (ichiran/conn:with-db nil
-      ;; kana_text as REAL DAO objects via query-dao + raw SQL (bound id/seq/
-      ;; text/ord — usable directly by find-word). ~3.3M rows, ~1.7GB.
-      ;; kanji_text (5.4M rows) as DAOs exhausts memory — compact binary
-      ;; format is future work; S1 cache covers conj lookups cross-sentence.
+      ;; kana_text only (489 MB): the common find-word path. kanji_text
+      ;; (5.4M rows) as plists fatals SBCL's GC — needs a compact binary
+      ;; format, documented as future work.
       (loop with offset = 0
-            for rows = (ichiran/dict::query-dao 'ichiran/dict::kana-text
-                                                (format nil "SELECT * FROM kana_text ORDER BY id LIMIT ~a OFFSET ~a"
-                                                        chunk offset))
+            for rows = (ichiran/conn::query
+                        (format nil "SELECT id, seq, text, ord FROM kana_text ORDER BY id LIMIT ~a OFFSET ~a"
+                                chunk offset)
+                        :plists)
             while rows
-            do (dolist (kt rows)
-                 (push kt (gethash (ichiran/dict::text kt) *kana-by-text*))
-                 (push kt (gethash (ichiran/dict::seq kt) *kana-by-seq*)))
+            do (dolist (pl rows)
+                 (let* ((txt (getf pl :text))
+                        (seq (getf pl :seq))
+                        (obj (cons 'kana_text pl)))
+                   (push obj (gethash txt *kana-by-text*))
+                   (push obj (gethash seq *kana-by-seq*))))
                (incf offset chunk)))
     (let ((after (sb-kernel:dynamic-usage)))
       (format t "memdict-load: ~,1f MB delta~%"
