@@ -13,7 +13,7 @@
 (defpackage #:ichiran/cache
   (:use #:cl #:postmodern #:ichiran/conn)
   (:export #:ensure-entry #:ensure-posi #:ensure-uk #:ensure-conj-data
-           #:cache-reset #:cache-stats))
+           #:prefetch-seq-data #:cache-reset #:cache-stats))
 
 (in-package #:ichiran/cache)
 
@@ -131,3 +131,22 @@
     (memo-fill *conj-data-table* key
                (lambda ()
                  (ichiran/dict::get-conj-data seq from texts)))))
+
+;;; ---- S2: sentence-level batched prefetch ----
+
+(defun prefetch-seq-data (seqs)
+  "Batch-load S1 entry table for all SEQS in ONE IN query (the biggest
+   per-candidate cost: get-dao entry). posi/uk/conj stay lazy (S1 memoizes
+   them; prefetching them per-seq costs MORE round-trips than the lazy
+   path since many substrings never score). Returns count prefetched."
+  (let ((seqs (remove-duplicates (remove nil seqs))))
+    (when seqs
+      (let ((to-load (loop for s in seqs
+                           unless (nth-value 1 (memo-get *entry-table* s))
+                           collect s)))
+        (when to-load
+          (dolist (row (ichiran/dict::select-dao 'ichiran/dict::entry
+                                                 (:in 'seq (:set to-load))))
+            (let ((seq (ichiran/dict::seq row)))
+              (memo-set *entry-table* seq row))))))
+    (length seqs)))

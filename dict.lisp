@@ -1108,13 +1108,24 @@
         (error "ichiran/cache not loaded"))))
 
 (defun join-substring-words* (str)
-  (loop with sticky = (find-sticky-positions str)
-        with substring-hash = (find-substring-words str :sticky sticky)
-        with katakana-groups = (consecutive-char-groups :katakana str)
-        with number-groups = (consecutive-char-groups :number str)
-        and kanji-break and ends
-       with suffix-map = (get-suffix-map str)
-       for start from 0 below (length str)
+  (let ((sticky (find-sticky-positions str))
+        (substring-hash (find-substring-words str :sticky (find-sticky-positions str)))
+        (katakana-groups (consecutive-char-groups :katakana str))
+        (number-groups (consecutive-char-groups :number str)))
+    ;; S2: batch-prefetch S1 cache for every distinct seq in this sentence so
+    ;; calc-score's per-candidate lookups hit the cache, not the DB.
+    ;; substring-hash values are lists of (table . plist) conses.
+    (when (and (cache-enabled-p) (find-package :ichiran/cache))
+      (let ((seqs (loop for v being the hash-values of substring-hash
+                        nconc (loop for init in v when (getf (cdr init) :seq) collect (getf (cdr init) :seq)))))
+        (cache-call 'prefetch-seq-data seqs)))
+    (loop with sticky = sticky
+          with substring-hash = substring-hash
+          with katakana-groups = katakana-groups
+          with number-groups = number-groups
+          and kanji-break and ends
+          with suffix-map = (get-suffix-map str)
+          for start from 0 below (length str)
        for katakana-group-end = (cdr (assoc start katakana-groups))
        for number-group-end = (cdr (assoc start number-groups))
        unless (member start sticky)
@@ -1147,7 +1158,7 @@
                 (pushnew end ends)
                 (list (list start end segments)))))
        into result
-     finally (return (values result (remove-duplicates kanji-break)))))
+     finally (return (values result (remove-duplicates kanji-break))))))
 
 (defun join-substring-words (str)
   (multiple-value-bind (result kanji-break) (join-substring-words* str)
