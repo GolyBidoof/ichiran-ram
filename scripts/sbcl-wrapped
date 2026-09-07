@@ -13,9 +13,11 @@ mkdir -p "$XDG_CACHE_HOME" "$QUICKLISP_HOME"
 
 runtime=(--dynamic-space-size 4096 --no-userinit)
 rest=()
+user_space=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dynamic-space-size) shift 2 ;;   # ours is already first
+    --dynamic-space-size)
+      user_space="$2"; shift 2 ;;   # honor the user's heap request (ours is a default)
     --core|--control-stack-size|--tls-limit|--memory-fault-error)
       runtime+=("$1" "$2"); shift 2 ;;
     --noinform|--non-interactive|--disable-debugger|--quit|--no-sysinit|--no-userinit)
@@ -25,6 +27,13 @@ while [ $# -gt 0 ]; do
     *) rest+=("$1"); shift ;;
   esac
 done
+
+# If the user requested a heap size, replace our default (must stay first
+# in the runtime args — SBCL requires --dynamic-space-size before other opts).
+if [ -n "$user_space" ]; then
+  runtime[0]="--dynamic-space-size"
+  runtime[1]="$user_space"
+fi
 
 exec /opt/homebrew/bin/sbcl "${runtime[@]}" \
   --load "$PWD/local-env/quicklisp/setup.lisp" "${rest[@]}"
