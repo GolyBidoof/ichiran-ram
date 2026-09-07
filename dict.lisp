@@ -785,7 +785,7 @@
 ;; *skip-words* *(semi-/non-)final-prt* *weak-conj-forms* *skip-conj-forms* are defined in dict-errata.lisp
 
 (defun calc-score (reading &key final use-length (score-mod 0) kanji-break &aux ctr-mode)
-  (declare (optimize (speed 3) (debug 3) (safety 1)))
+  (declare (optimize (speed 3) (debug 1) (safety 1)))
   (declare (type (or null (integer 0 10000)) use-length))
   (typecase reading
     (compound-text
