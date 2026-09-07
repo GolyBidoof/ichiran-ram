@@ -1175,6 +1175,7 @@
         (error "ichiran/trie not loaded"))))
 
 (defun join-substring-words* (str)
+  (declare (optimize (speed 3) (safety 1) (debug 1)))
   (let ((sticky (find-sticky-positions str))
         (substring-hash (find-substring-words str :sticky (find-sticky-positions str)))
         (katakana-groups (consecutive-char-groups :katakana str))
@@ -1318,6 +1319,7 @@
          #'> :key #'segment-score)))
 
 (defun find-best-path (segment-lists str-length &key (limit 5))
+  (declare (optimize (speed 3) (safety 1) (debug 1)))
   "generalized version of old find-best-path that operates on segment-lists and uses synergies"
   (let ((top (make-instance 'top-array :limit limit)))
     (register-item top (gap-penalty 0 str-length) nil)
@@ -1518,6 +1520,7 @@
       (word-info-from-segment-list segment-list))))
 
 (defun fill-segment-path (str path)
+  (declare (optimize (speed 3) (safety 1) (debug 1)))
   (flet ((make-substr-gap (start end)
            (let ((substr (subseq str start end)))
              (make-instance 'word-info
@@ -1578,6 +1581,7 @@
       (car (select-dao table (:= 'text true-text))))))
 
 (defun dict-segment (str &key (limit 5))
+  (declare (optimize (speed 3) (safety 1) (debug 1)))
   (with-connection *connection*
     (loop for (path . score) in (find-best-path (join-substring-words str) (length str) :limit limit)
          collect (cons (fill-segment-path str path) score))))
