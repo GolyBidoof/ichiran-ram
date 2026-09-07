@@ -5,6 +5,14 @@
 
 (in-package :ichiran/cli)
 
+;; S5: src/daemon.lisp is not (yet) a component of the ichiran system, so it
+;; is loaded here at compile/load/execute time. This makes the ICHIRAN/DAEMON
+;; package exist when this file is read (the reader resolves the
+;; ichiran/daemon:serve-loop qualifier below); the load is idempotent, and
+;; main re-loads it in the --serve clause as a safety net.
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (load (asdf:system-relative-pathname :ichiran "src/daemon.lisp")))
+
 (opts:define-opts
   (:name :help
    :description "print this help text"
@@ -28,7 +36,10 @@
    :long "limit"
    :arg-parser #'parse-integer
    :default 1
-   :meta-var "LIMIT"))
+   :meta-var "LIMIT")
+   (:name :serve
+    :description "run as a persistent JSON daemon (reads sentences on stdin, writes JSON on stdout)"
+    :long "serve"))
 
 (defun unknown-option (condition)
   (format t "warning: ~s option is unknown!~%" (opts:option condition))
@@ -85,6 +96,10 @@
               (limit-value (getf options :limit))
               (result (romanize* input :limit limit-value)))
          (princ (jsown:to-json result))))
+      ((getf options :serve)
+       (load (asdf:system-relative-pathname :ichiran "src/daemon.lisp"))
+       (ichiran/daemon:serve-loop)
+       (return-from main))
       (t (let ((input (join " " free-args)))
            (princ (romanize input :with-info t))))
       ))
