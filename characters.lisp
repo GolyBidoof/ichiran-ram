@@ -62,25 +62,28 @@
 (declaim (inline char-in-class-p))
 (defun char-in-class-p (char char-class)
   "True if CHAR is in the given char-class. Fast range/table checks instead
-   of regex (the *char-class-hash* maps kana to syllables, not these
-   classes; kanji/digits aren't in it)."
+   of regex. Ranges match *char-class-regex-mapping* exactly:
+   hiragana [ぁ-ゔゝゞー], katakana [ァ-ヺヽヾー], kanji [々ヶ〆一-龯],
+   number [0-9０-９〇一二三四五六七八九零壱弐参拾十百千万億兆京]."
   (let ((code (char-code char)))
     (ecase char-class
-      (:hiragana (<= #x3040 code #x309F))
-      (:katakana (<= #x30A0 code #x30FF))
-      (:kana (or (<= #x3040 code #x309F) (<= #x30A0 code #x30FF)
-                 (<= #x31F0 code #x31FF) ;; katakana phonetic extensions
-                 (char= char #\ー) (char= char #\ﾞ) (char= char #\ﾟ)))
-      (:katakana-uniq (<= #x30A0 code #x30FF))
-      (:kanji (or (<= #x4E00 code #x9FFF)
-                  (<= #x3400 code #x4DBF)
-                  (char= char #\々) (char= char #\〆) (char= char #\〇)))
-      (:kanji-char (or (<= #x4E00 code #x9FFF)
-                       (<= #x3400 code #x4DBF)
-                       (char= char #\々) (char= char #\〇)))
+      (:hiragana (or (<= #x3041 code #x3094) ;; ぁ-ゔ
+                     (char= char #\ー) (char= char #\ゝ) (char= char #\ゞ)))
+      (:katakana (or (<= #x30A1 code #x30FA) ;; ァ-ヺ
+                     (char= char #\ヽ) (char= char #\ヾ) (char= char #\ー)))
+      (:kana (or (<= #x3041 code #x3094)
+                 (<= #x30A1 code #x30FA)
+                 (char= char #\ー) (char= char #\ゝ) (char= char #\ゞ)
+                 (char= char #\ヽ) (char= char #\ヾ)))
+      (:katakana-uniq (or (<= #x30A1 code #x30FA)
+                          (char= char #\ヽ) (char= char #\ヾ) (char= char #\ー)))
+      (:kanji (or (<= #x4E00 code #x9FA5) ;; 一-龯
+                  (char= char #\々) (char= char #\ヶ) (char= char #\〆)))
+      (:kanji-char (<= #x4E00 code #x9FA5))
       (:number (or (<= (char-code #\0) code (char-code #\9))
-                   (<= #xFF10 code #xFF19) ;; fullwidth digits
-                   (char= char #\〇)))
+                   (<= #xFF10 code #xFF19)
+                   (char= char #\〇)
+                   (find char "一二三四五六七八九零壱弐参拾十百千万億兆京" :test 'char=)))
       (:traditional nil)
       (:nonword nil))))
 
