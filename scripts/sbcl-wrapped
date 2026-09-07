@@ -1,0 +1,30 @@
+#!/bin/bash
+# sbcl-wrapped — run SBCL with ALL writable state inside the workspace.
+# - XDG_CACHE_HOME  : fasl cache
+# - QUICKLISP_HOME  : workspace copy local-env/quicklisp
+# - --no-userinit   : suppress ~/.sbclrc (which loads the OLD home quicklisp)
+# SBCL ordering rule (verified): --dynamic-space-size must come FIRST,
+# then --no-userinit, then other runtime opts, then our setup load, then user
+# --eval/--load. We always emit dynamic-space-size ourselves FIRST.
+cd "$(dirname "$0")/.." || exit 1
+export XDG_CACHE_HOME="$PWD/local-env/cache"
+export QUICKLISP_HOME="$PWD/local-env/quicklisp"
+mkdir -p "$XDG_CACHE_HOME" "$QUICKLISP_HOME"
+
+runtime=(--dynamic-space-size 4096 --no-userinit)
+rest=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dynamic-space-size) shift 2 ;;   # ours is already first
+    --core|--control-stack-size|--tls-limit|--memory-fault-error)
+      runtime+=("$1" "$2"); shift 2 ;;
+    --noinform|--non-interactive|--disable-debugger|--quit|--no-sysinit|--no-userinit)
+      runtime+=("$1"); shift ;;
+    --eval|--load|--script|--lisp)
+      rest+=("$1" "$2"); shift 2 ;;
+    *) rest+=("$1"); shift ;;
+  esac
+done
+
+exec /opt/homebrew/bin/sbcl "${runtime[@]}" \
+  --load "$PWD/local-env/quicklisp/setup.lisp" "${rest[@]}"
