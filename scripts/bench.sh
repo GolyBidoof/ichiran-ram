@@ -41,7 +41,7 @@ cat > /tmp/ichiran-bench.lisp <<'EOF'
 EOF
 
 echo "== bench.sh: warmup + baseline =="
-sbcl --dynamic-space-size 8192 \
+scripts/sbcl-wrapped --dynamic-space-size 8192 \
      --non-interactive \
      --eval '(ql:quickload :ichiran :silent t)' \
      --load /tmp/ichiran-bench.lisp \

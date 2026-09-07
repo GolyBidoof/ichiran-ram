@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.." || exit 1
 timeout_sec="${PARITY_TIMEOUT:-1800}"
 echo "== parity.sh: ichiran test suite (timeout ${timeout_sec}s) =="
 
-sbcl --non-interactive \
+scripts/sbcl-wrapped --non-interactive \
      --eval '(ql:quickload :ichiran :silent t)' \
      --eval '(in-package :ichiran/test)' \
      --eval "(format t \"~%== running (ichiran/test:run-all-tests) ==~%\")" \
