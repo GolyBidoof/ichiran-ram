@@ -16,6 +16,7 @@ mkdir -p local-env
 cat > /tmp/build-serving.lisp <<'EOF'
 (ql:quickload :ichiran :silent t)
 (load "src/memdict-compact.lisp")
+(load "src/memdict-compact-shims.lisp")
 (in-package :cl-user)
 (format t "~%== building serving image: loading compact dict...~%")
 (ichiran/memdict-compact:memdict-load)

@@ -1,29 +1,51 @@
-;;;; src/memdict-compact.lisp — R1: compact in-memory dictionary.
+;;;; src/memdict-compact.lisp — R1/R4: compact in-memory dictionary.
 ;;;;
-;;;; Loads ALL hot tables as COMPACT structs (defstruct, not fat CLOS DAOs):
+;;;; Loads hot tables as COMPACT structs (defstruct, not fat CLOS DAOs):
 ;;;;   - kana_text, kanji_text:  ~4-6 words/row vs ~10+ slots + class overhead
 ;;;;   - conjugation, conj_prop, conj_source_reading, entry
-;;;; Est. ~1-2GB total vs 8-16GB as DAOs (which fatals SBCL).
 ;;;;
-;;;; The analyzer reads these via GENERIC functions (text, seq, ord, common,
-;;;; nokanji, conjugate-p, get-kana, get-kanji, get-text, best-kana, ...).
-;;;; We define defmethod shims on the compact structs so existing code works
-;;;; unchanged when *memdict-p* is on. The DAO classes keep working for the
-;;;; DB path (flag OFF).
+;;;; DECOUPLED for R4 (zero-DB serving): this file depends ONLY on
+;;;; postmodern. It no longer :use's :ichiran/conn or :ichiran/dict, so it
+;;;; can be loaded into a MINIMAL SBCL image (quickload :postmodern only) for
+;;;; the dedicated serving core. All analyzer shims (defmethod on ichiran/dict
+;;;; generics) are conditional on the ichiran/dict package being present; when
+;;;; loading bare they are skipped, and the standalone API (memdict-find,
+;;;; memdict-find-by-seq, ...) remains for the serving core to call directly.
 
 (defpackage #:ichiran/memdict-compact
-  (:use #:cl #:postmodern #:ichiran/conn)
+  (:use #:cl #:postmodern)
   (:export #:memdict-load #:memdict-find #:memdict-find-by-seq
            #:memdict-conj-by-seq #:memdict-conj-by-from #:memdict-conj-prop
            #:memdict-conj-source-reading #:memdict-enabled-p #:memdict-entry
            #:memdict-stats #:memdict-reload #:compact-kana #:compact-kanji
-           #:compact-conj #:compact-conj-prop #:compact-csr #:compact-entry))
+           #:compact-conj #:compact-conj-prop #:compact-csr #:compact-entry
+           #:compact-kana-text #:compact-kanji-text #:compact-kana-seq
+           #:compact-kanji-seq #:compact-kana-ord #:compact-kanji-ord
+           #:compact-kana-best-kana #:compact-kanji-best-kana
+           #:make-compact-kana #:make-compact-kanji))
 
 (in-package #:ichiran/memdict-compact)
 
 (defvar *memdict-enabled-p* nil)
 (defun memdict-enabled-p () *memdict-enabled-p*)
 (defun (setf memdict-enabled-p) (v) (setf *memdict-enabled-p* v))
+
+;;; ---- connection spec helper (bare-load friendly) ----
+;;; When :ichiran/conn is loaded, memdict-load uses its *connection* by
+;;; default; otherwise the caller must pass :conn (a postmodern spec list).
+
+(defun default-conn ()
+  (let ((pkg (find-package :ichiran/conn)))
+    (if pkg
+        (symbol-value (find-symbol "*CONNECTION*" pkg))
+        (error "memdict-load needs a :conn spec (no ichiran/conn loaded)"))))
+
+(defmacro with-db-connection ((spec) &body body)
+  "Run BODY with a postmodern connection to SPEC. SPEC may be NIL (use
+   ichiran/conn:*connection* if available, else error)."
+  `(let ((conn (or ,spec (default-conn))))
+     (postmodern:with-connection conn
+       ,@body)))
 
 ;;; ---- compact structs (defstruct = tight, no CLOS overhead) ----
 
@@ -66,16 +88,17 @@
   (or (gethash s *string-pool*)
       (setf (gethash s *string-pool*) s)))
 
-(defun memdict-load (&key (chunk 100000))
-  "Load kana_text + kanji_text as compact structs with interned strings."
+(defun memdict-load (&key (chunk 100000) conn)
+  "Load kana_text + kanji_text as compact structs with interned strings.
+   CONN is a postmodern connection spec (defaults to ichiran/conn's
+   *connection* when that package is loaded)."
   (let ((before (sb-kernel:dynamic-usage)))
-    (ichiran/conn:with-db nil
+    (with-db-connection (conn)
       (flet ((load-table (table maker)
                (loop with offset = 0
-                     for rows = (ichiran/conn::query
-                                 (format nil "SELECT * FROM ~a ORDER BY id LIMIT ~a OFFSET ~a"
-                                         table chunk offset)
-                                 :lists)
+                     for rows = (query (format nil "SELECT * FROM ~a ORDER BY id LIMIT ~a OFFSET ~a"
+                                               table chunk offset)
+                                       :lists)
                      while rows
                      do (dolist (pl rows) (funcall maker pl))
                         (incf offset chunk))))
@@ -86,8 +109,7 @@
                                                     :common common :common-tags common-tags
                                                     :conjugate-p conjugate-p :nokanji nokanji
                                                     :best-kanji best-kanji)))
-                          (push o (gethash (compact-kana-text o) *kana-by-text*))))))
-        ))
+                          (push o (gethash (compact-kana-text o) *kana-by-text*))))))))
     (let ((after (sb-kernel:dynamic-usage)))
       (format t "memdict-compact load: ~,1f MB delta~%"
               (/ (- after before) 1048576.0)))
@@ -124,95 +146,3 @@
 (defun memdict-conj-source-reading (conj-id) (gethash conj-id *csr-by-id*))
 (defun memdict-entry (seq) (gethash seq *entry-by-seq*))
 
-
-
-(defmethod ichiran/dict::word-conj-data ((obj compact-kana))
-  (ichiran/dict::get-conj-data (compact-kana-seq obj)
-                               (compact-kana-conjugations obj)
-                               (compact-kana-text obj)))
-(defmethod ichiran/dict::word-conjugations ((obj compact-kanji))
-  (compact-kanji-conjugations obj))
-(defmethod (setf ichiran/dict::word-conjugations) (v (obj compact-kanji))
-  (setf (compact-kanji-conjugations obj) v))
-(defmethod ichiran/dict::true-text ((obj compact-kanji))
-  (compact-kanji-text obj))
-(defmethod ichiran/dict::get-text ((obj compact-kanji))
-  (compact-kanji-text obj))
-(defmethod ichiran/dict::get-kana ((obj compact-kanji))
-  (compact-kanji-best-kana obj))
-(defmethod ichiran/dict::word-type ((obj compact-kanji))
-  :kanji)
-(defmethod ichiran/dict::word-conj-data ((obj compact-kanji))
-  (ichiran/dict::get-conj-data (compact-kanji-seq obj)
-                               (compact-kanji-conjugations obj)
-                               (compact-kanji-text obj)))
-
-
-(defmethod ichiran/dict::get-original-text ((reading compact-kana) &key conj-data)
-  (let ((orig-texts (ichiran/dict::get-original-text* (or conj-data (ichiran/dict::word-conj-data reading))
-                                                      (compact-kana-text reading)))
-        (table 'ichiran/dict::kana-text))
-    (loop for (txt seq) in orig-texts
-          nconc (ichiran/dict::select-dao table (:and (:= 'seq seq) (:= 'text txt))))))
-(defmethod ichiran/dict::get-original-text ((reading compact-kanji) &key conj-data)
-  (let ((orig-texts (ichiran/dict::get-original-text* (or conj-data (ichiran/dict::word-conj-data reading))
-                                                      (compact-kanji-text reading)))
-        (table 'ichiran/dict::kanji-text))
-    (loop for (txt seq) in orig-texts
-          nconc (ichiran/dict::select-dao table (:and (:= 'seq seq) (:= 'text txt))))))
-(defmethod ichiran/dict::common ((obj compact-kana)) (compact-kana-common obj))
-(defmethod ichiran/dict::common ((obj compact-kanji)) (compact-kanji-common obj))
-(defmethod ichiran/dict::nokanji ((obj compact-kana)) (compact-kana-nokanji obj))
-(defmethod ichiran/dict::nokanji ((obj compact-kanji)) (compact-kanji-nokanji obj))
-(defmethod ichiran/dict::conjugate-p ((obj compact-kana)) (compact-kana-conjugate-p obj))
-(defmethod ichiran/dict::conjugate-p ((obj compact-kanji)) (compact-kanji-conjugate-p obj))
-
-;;; ---- simple-text interface shims (word-conjugations, hintedp, true-text,
-;;; get-kana, get-text, word-type) ----
-
-(defmethod ichiran/dict::word-conjugations ((obj compact-kana))
-  (compact-kana-conjugations obj))
-(defmethod (setf ichiran/dict::word-conjugations) (v (obj compact-kana))
-  (setf (compact-kana-conjugations obj) v))
-(defmethod ichiran/dict::hintedp ((obj compact-kana))
-  (compact-kana-hintedp obj))
-(defmethod ichiran/dict::true-text ((obj compact-kana))
-  (compact-kana-text obj))
-(defmethod ichiran/dict::get-text ((obj compact-kana))
-  (compact-kana-text obj))
-(defmethod ichiran/dict::get-kana ((obj compact-kana))
-  ;; mirror simple-text get-kana :around: apply hints unless disabled/hinted
-  (or (unless (or ichiran/dict::*disable-hints* (compact-kana-hintedp obj))
-        (let ((ichiran/dict::*disable-hints* t))
-          (ichiran/dict::get-hint obj)))
-      (compact-kana-text obj)))
-(defmethod ichiran/dict::word-type ((obj compact-kana))
-  :kana)
-
-;;; ---- defmethod shims so existing analyzer code works on compact structs ----
-;;; (only active when the package is loaded and *memdict-p* routes to it)
-
-(defmethod ichiran/dict::text ((obj compact-kana)) (compact-kana-text obj))
-(defmethod ichiran/dict::seq ((obj compact-kana)) (compact-kana-seq obj))
-(defmethod ichiran/dict::ord ((obj compact-kana)) (compact-kana-ord obj))
-(defmethod ichiran/dict::common ((obj compact-kana)) (compact-kana-common obj))
-(defmethod ichiran/dict::common-tags ((obj compact-kana)) (compact-kana-common-tags obj))
-(defmethod ichiran/dict::conjugate-p ((obj compact-kana)) (compact-kana-conjugate-p obj))
-(defmethod ichiran/dict::nokanji ((obj compact-kana)) (compact-kana-nokanji obj))
-(defmethod ichiran/dict::best-kana ((obj compact-kana)) (compact-kana-best-kana obj))
-(defmethod ichiran/dict::id ((obj compact-kana)) (compact-kana-id obj))
-
-(defmethod ichiran/dict::text ((obj compact-kanji)) (compact-kanji-text obj))
-(defmethod ichiran/dict::seq ((obj compact-kanji)) (compact-kanji-seq obj))
-(defmethod ichiran/dict::ord ((obj compact-kanji)) (compact-kanji-ord obj))
-(defmethod ichiran/dict::common ((obj compact-kanji)) (compact-kanji-common obj))
-(defmethod ichiran/dict::common-tags ((obj compact-kanji)) (compact-kanji-common-tags obj))
-(defmethod ichiran/dict::conjugate-p ((obj compact-kanji)) (compact-kanji-conjugate-p obj))
-(defmethod ichiran/dict::nokanji ((obj compact-kanji)) (compact-kanji-nokanji obj))
-(defmethod ichiran/dict::best-kana ((obj compact-kanji)) (compact-kanji-best-kana obj))
-(defmethod ichiran/dict::id ((obj compact-kanji)) (compact-kanji-id obj))
-
-(defmethod ichiran/dict::seq ((obj compact-conj)) (compact-conj-seq obj))
-(defmethod ichiran/dict::seq-from ((obj compact-conj)) (compact-conj-from obj))
-(defmethod ichiran/dict::seq-via ((obj compact-conj)) (compact-conj-via obj))
-(defmethod ichiran/dict::id ((obj compact-conj)) (compact-conj-id obj))
