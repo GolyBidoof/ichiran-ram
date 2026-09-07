@@ -1107,6 +1107,23 @@
         (apply (symbol-function (intern (string fn-name) pkg)) args)
         (error "ichiran/cache not loaded"))))
 
+;;; Perf: S4 trie — when enabled (and ichiran/trie is loaded), the inner
+;;; window loop in join-substring-words* only probes (start,end) pairs that
+;;; are valid dictionary prefixes per the trie, instead of every window.
+;;; Default OFF. Set *ichiran-trie* to a trie built over the dictionary's
+;;; surface texts (kanji + kana) with (ichiran/trie:build-trie pairs).
+(defvar *trie-p* nil)
+(defvar *ichiran-trie* nil)
+
+(defun trie-enabled-p ()
+  (and *trie-p* (find-package :ichiran/trie)))
+
+(defun trie-call (fn-name &rest args)
+  (let ((pkg (find-package :ichiran/trie)))
+    (if pkg
+        (apply (symbol-function (intern (string fn-name) pkg)) args)
+        (error "ichiran/trie not loaded"))))
+
 (defun join-substring-words* (str)
   (let ((sticky (find-sticky-positions str))
         (substring-hash (find-substring-words str :sticky (find-sticky-positions str)))
@@ -1130,33 +1147,41 @@
        for number-group-end = (cdr (assoc start number-groups))
        unless (member start sticky)
        nconcing
-       (loop for end from (1+ start) upto (min (length str) (+ start *max-word-length*))
-            unless (member end sticky)
-            nconcing
-            (let* ((part (subseq str start end))
-                   (segments (mapcar
-                              (lambda (word)
-                                (make-segment :start start :end end :word word))
-                              (let ((*suffix-map-temp* suffix-map)
-                                    (*suffix-next-end* end)
-                                    (*substring-hash* substring-hash))
-                                (find-word-full part
-                                                :as-hiragana (and katakana-group-end (= end katakana-group-end))
-                                                :counter (and number-group-end
-                                                              (<= number-group-end end)
-                                                              (let ((d (- number-group-end start)))
-                                                                (and (<= d 20) d))))))))
-              (when segments
-                (when (or (= start 0) (find start ends))
-                  (setf kanji-break
-                        (nconc (cond
-                                 ((find part *force-kanji-break* :test 'equal)
-                                  (alexandria:iota (1- (length part)) :start (1+ start)))
-                                 ((find part *no-kanji-break* :test 'equal) nil)
-                                 (t (sequential-kanji-positions part start)))
-                               kanji-break)))
-                (pushnew end ends)
-                (list (list start end segments)))))
+       (let ((end-list (if (trie-enabled-p)
+                           ;; S4: only probe ends that are valid dictionary prefixes
+                           (mapcar #'car (trie-call 'trie-prefix-matches
+                                                    *ichiran-trie* str start
+                                                    :max-len *max-word-length*))
+                           (loop for e from (1+ start)
+                                 upto (min (length str) (+ start *max-word-length*))
+                                 collect e))))
+         (loop for end in end-list
+              unless (member end sticky)
+              nconcing
+              (let* ((part (subseq str start end))
+                     (segments (mapcar
+                                (lambda (word)
+                                  (make-segment :start start :end end :word word))
+                                (let ((*suffix-map-temp* suffix-map)
+                                      (*suffix-next-end* end)
+                                      (*substring-hash* substring-hash))
+                                  (find-word-full part
+                                                  :as-hiragana (and katakana-group-end (= end katakana-group-end))
+                                                  :counter (and number-group-end
+                                                                (<= number-group-end end)
+                                                                (let ((d (- number-group-end start)))
+                                                                  (and (<= d 20) d))))))))
+                (when segments
+                  (when (or (= start 0) (find start ends))
+                    (setf kanji-break
+                          (nconc (cond
+                                   ((find part *force-kanji-break* :test 'equal)
+                                    (alexandria:iota (1- (length part)) :start (1+ start)))
+                                   ((find part *no-kanji-break* :test 'equal) nil)
+                                   (t (sequential-kanji-positions part start)))
+                                 kanji-break)))
+                  (pushnew end ends)
+                  (list (list start end segments))))))
        into result
      finally (return (values result (remove-duplicates kanji-break))))))
 
