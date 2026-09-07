@@ -88,10 +88,10 @@
   (or (gethash s *string-pool*)
       (setf (gethash s *string-pool*) s)))
 
-(defun memdict-load (&key (chunk 100000) conn)
-  "Load kana_text + kanji_text as compact structs with interned strings.
-   CONN is a postmodern connection spec (defaults to ichiran/conn's
-   *connection* when that package is loaded)."
+(defun memdict-load (&key (chunk 100000) conn (tables '("kana_text" "kanji_text")))
+  "Load TABLES as compact structs with interned strings. Default tables:
+   kana_text + kanji_text. CONN is a postmodern connection spec (defaults to
+   ichiran/conn's *connection* when that package is loaded)."
   (let ((before (sb-kernel:dynamic-usage)))
     (with-db-connection (conn)
       (flet ((load-table (table maker)
@@ -102,14 +102,26 @@
                      while rows
                      do (dolist (pl rows) (funcall maker pl))
                         (incf offset chunk))))
-        (load-table "kana_text"
-                    (lambda (pl)
-                      (destructuring-bind (id seq text ord common common-tags conjugate-p nokanji best-kanji) pl
-                        (let ((o (make-compact-kana :id id :seq seq :text (intern-text text) :ord ord
-                                                    :common common :common-tags common-tags
-                                                    :conjugate-p conjugate-p :nokanji nokanji
-                                                    :best-kanji best-kanji)))
-                          (push o (gethash (compact-kana-text o) *kana-by-text*))))))))
+        (when (member "kana_text" tables :test 'equal)
+          (format t "memdict-compact: loading kana_text...~%")
+          (load-table "kana_text"
+                      (lambda (pl)
+                        (destructuring-bind (id seq text ord common common-tags conjugate-p nokanji best-kanji) pl
+                          (let ((o (make-compact-kana :id id :seq seq :text (intern-text text) :ord ord
+                                                      :common common :common-tags common-tags
+                                                      :conjugate-p conjugate-p :nokanji nokanji
+                                                      :best-kanji best-kanji)))
+                            (push o (gethash (compact-kana-text o) *kana-by-text*)))))))
+        (when (member "kanji_text" tables :test 'equal)
+          (format t "memdict-compact: loading kanji_text...~%")
+          (load-table "kanji_text"
+                      (lambda (pl)
+                        (destructuring-bind (id seq text ord common common-tags conjugate-p nokanji best-kana) pl
+                          (let ((o (make-compact-kanji :id id :seq seq :text (intern-text text) :ord ord
+                                                       :common common :common-tags common-tags
+                                                       :conjugate-p conjugate-p :nokanji nokanji
+                                                       :best-kana best-kana)))
+                            (push o (gethash (compact-kanji-text o) *kanji-by-text*)))))))))
     (let ((after (sb-kernel:dynamic-usage)))
       (format t "memdict-compact load: ~,1f MB delta~%"
               (/ (- after before) 1048576.0)))
