@@ -35,61 +35,28 @@
   (push value (gethash key hash)))
 
 (defun memdict-load (&key (chunk 100000))
-  "Load the hot lookup tables into memory in chunks. Scope (kept memory-
-   sane for a 24GB box): kana-text, kanji-text (text->rows + seq->rows),
-   conjugation, conj-prop, conj-source-reading. The full entry table
-   (2.5M fat DAOs) is NOT loaded — find-word needs text->rows, and entry
-   rows are only used for n-kanji/n-kana stats which the text tables carry.
-   Returns a stats plist."
+  "Load the kana_text table into memory (text -> rows, seq -> rows), the
+   common find-word path (~489MB). kanji_text (5.4M rows) and the huge
+   conjugation tables are NOT loaded as plists — they need a compact binary
+   format (future work) and S1 cache (src/cache.lisp) memoizes conj data
+   cross-sentence. Returns a stats plist."
   (let ((before (sb-kernel:dynamic-usage)))
     (ichiran/conn:with-db nil
-      ;; kana-text / kanji-text: text -> list, seq -> list (chunked raw SQL)
-      (loop for table in '("kana_text" "kanji_text")
-            for hash-by-text = (if (equal table "kana_text") *kana-by-text* *kanji-by-text*)
-            for hash-by-seq = (if (equal table "kana_text") *kana-by-seq* *kanji-by-seq*)
-            do (loop with offset = 0
-                     for rows = (ichiran/conn::query
-                                 (format nil "SELECT * FROM ~a ORDER BY id LIMIT ~a OFFSET ~a"
-                                         table chunk offset)
-                                 :plists)
-                     while rows
-                     do (dolist (pl rows)
-                          (let* ((txt (getf pl :text))
-                                 (seq (getf pl :seq))
-                                 (obj (cons table pl)))
-                            (push obj (gethash txt hash-by-text))
-                            (push obj (gethash seq hash-by-seq))))
-                        (incf offset chunk)))
-      ;; conjugation: seq -> list, from -> list (chunked)
+      ;; kana_text only (489 MB): the common find-word path. kanji_text
+      ;; (5.4M rows) as plists fatals SBCL's GC — needs a compact binary
+      ;; format, documented as future work.
       (loop with offset = 0
             for rows = (ichiran/conn::query
-                        (format nil "SELECT * FROM conjugation ORDER BY id LIMIT ~a OFFSET ~a"
+                        (format nil "SELECT id, seq, text, ord FROM kana_text ORDER BY id LIMIT ~a OFFSET ~a"
                                 chunk offset)
                         :plists)
             while rows
             do (dolist (pl rows)
-                 (push (cons :conjugation pl) (gethash (getf pl :seq) *conj-by-seq*))
-                 (push (cons :conjugation pl) (gethash (getf pl :from) *conj-by-from*)))
-               (incf offset chunk))
-      ;; conj-prop: conj-id -> list
-      (loop with offset = 0
-            for rows = (ichiran/conn::query
-                        (format nil "SELECT * FROM conj_prop ORDER BY id LIMIT ~a OFFSET ~a"
-                                chunk offset)
-                        :plists)
-            while rows
-            do (dolist (pl rows)
-                 (push (cons :conj-prop pl) (gethash (getf pl :conj-id) *conj-prop-by-id*)))
-               (incf offset chunk))
-      ;; conj-source-reading: conj-id -> list
-      (loop with offset = 0
-            for rows = (ichiran/conn::query
-                        (format nil "SELECT * FROM conj_source_reading ORDER BY id LIMIT ~a OFFSET ~a"
-                                chunk offset)
-                        :plists)
-            while rows
-            do (dolist (pl rows)
-                 (push (cons :csr pl) (gethash (getf pl :conj-id) *csr-by-id*)))
+                 (let* ((txt (getf pl :text))
+                        (seq (getf pl :seq))
+                        (obj (cons 'kana_text pl)))
+                   (push obj (gethash txt *kana-by-text*))
+                   (push obj (gethash seq *kana-by-seq*))))
                (incf offset chunk)))
     (let ((after (sb-kernel:dynamic-usage)))
       (format t "memdict-load: ~,1f MB delta~%"
@@ -115,15 +82,22 @@
   nil)
 
 (defun memdict-find (table text)
-  "Return list of (table . plist) conses for TEXT in kana_text/kanji_text."
-  (gethash text (ecase table
-                  (kana-text *kana-by-text*)
-                  (kanji-text *kanji-by-text*))))
+  "Return list of (table . plist) conses for TEXT in kana_text/kanji_text.
+   TABLE may be 'kana-text/'kanji-text or 'kana_text/'kanji_text."
+  (let ((name (string-downcase (symbol-name table))))
+    (cond ((or (string= name "kana-text") (string= name "kana_text"))
+           (gethash text *kana-by-text*))
+          ((or (string= name "kanji-text") (string= name "kanji_text"))
+           (gethash text *kanji-by-text*))
+          (t nil))))
 
 (defun memdict-find-by-seq (table seq)
-  (gethash seq (ecase table
-                 (kana-text *kana-by-seq*)
-                 (kanji-text *kanji-by-seq*))))
+  (let ((name (string-downcase (symbol-name table))))
+    (cond ((or (string= name "kana-text") (string= name "kana_text"))
+           (gethash seq *kana-by-seq*))
+          ((or (string= name "kanji-text") (string= name "kanji_text"))
+           (gethash seq *kanji-by-seq*))
+          (t nil))))
 
 (defun memdict-conj-by-seq (seq)
   (gethash seq *conj-by-seq*))
