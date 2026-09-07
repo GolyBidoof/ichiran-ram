@@ -13,7 +13,9 @@
 (defpackage #:ichiran/cache
   (:use #:cl #:postmodern #:ichiran/conn)
   (:export #:ensure-entry #:ensure-posi #:ensure-uk #:ensure-conj-data
-           #:prefetch-seq-data #:cache-reset #:cache-stats))
+           #:prefetch-seq-data #:prefetch-conj-data #:prefetch-senses
+           #:ensure-senses #:conj-batch
+           #:conj-prop-batch #:csr-batch #:cache-reset #:cache-stats))
 
 (in-package #:ichiran/cache)
 
@@ -67,6 +69,77 @@
 (defparameter *uk-table* (make-memo-table :test 'equal))
 (defparameter *conj-data-table* (make-memo-table :test 'equal))
 
+;;; S2-v2: per-sentence batched conjugation data (filled by
+;;; prefetch-conj-data; consumed by get-conj-data's caller via conj-batch).
+(defparameter *conj-batch* nil "hash: conj-id -> conjugation DAO")
+(defparameter *conj-prop-batch* (make-hash-table :test 'eql) "hash: conj-id -> list of conj-prop DAOs")
+(defparameter *csr-batch* (make-hash-table :test 'eql) "hash: conj-id -> list of conj-source-reading DAOs")
+
+(defun conj-batch ()
+  "Return the current sentence's conjugation-by-id hash (or NIL)."
+  *conj-batch*)
+
+(defun conj-prop-batch ()
+  "Return the current sentence's conj-id -> conj-prop list hash."
+  *conj-prop-batch*)
+
+(defun csr-batch ()
+  "Return the current sentence's conj-id -> conj-source-reading list hash."
+  *csr-batch*)
+
+;;; ---- S2-v2b: per-sentence batched gloss/sense data (:with-info path) ----
+
+(defparameter *senses-table* (make-memo-table :test 'eql))
+
+(defun ensure-senses (seq)
+  "Memoized ichiran/dict::get-senses-raw seq (the 2-query gloss+props
+   lookup used by the :with-info path)."
+  (memo-fill *senses-table* seq
+             (lambda ()
+               (let ((ichiran/dict::*in-sense-cache* t))
+                 (ichiran/dict::get-senses-raw seq)))))
+
+(defun prefetch-senses (seqs)
+  "Batch-load sense/gloss/sense-prop for all SEQS in 2 IN queries total
+   (instead of 2 per seq), storing per-seq results into *senses-table* in
+   the same shape get-senses-raw returns (list of (:ord :gloss :props))."
+  (let ((seqs (remove-duplicates (remove nil seqs))))
+    (when seqs
+      (let ((to-load (loop for s in seqs
+                           unless (nth-value 1 (memo-get *senses-table* s))
+                           collect s)))
+        (when to-load
+          ;; 1. glosses: one query over all seqs, grouped per seq
+          (let ((gloss-by-seq (make-hash-table :test 'eql))
+                (sense-by-seq (make-hash-table :test 'eql))
+                (props-by-id (make-hash-table :test 'eql)))
+            (let ((sql (format nil "SELECT s.seq, s.id, s.ord, string_agg(g.text, '; ' ORDER BY g.ord) FROM sense s LEFT JOIN gloss g ON g.sense_id = s.id WHERE s.seq IN (~{~a~^,~}) GROUP BY s.id, s.seq, s.ord" to-load)))
+              (dolist (row (ichiran/conn::query sql :lists))
+              ;; row = (seq id ord gloss)
+              (destructuring-bind (seq sid ord gloss) row
+                (push (list :ord ord :gloss (if (eql gloss :null) "" gloss) :props nil :sense-id sid)
+                      (gethash seq gloss-by-seq)))))
+            ;; 2. props: one query over all seqs, grouped per sense
+            (let ((sql (format nil "SELECT s.seq, s.id, sp.tag, sp.text FROM sense s, sense_prop sp WHERE sp.sense_id = s.id AND s.seq IN (~{~a~^,~}) AND sp.tag IN ('pos','s_inf','stagk','stagr','field')" to-load)))
+              (dolist (row (ichiran/conn::query sql :lists))
+              (destructuring-bind (seq sid tag text) row
+                (push (list tag text) (gethash sid props-by-id)))))
+            ;; merge props into senses, then store per-seq
+            (dolist (seq to-load)
+              (let ((senses (sort (gethash seq gloss-by-seq) '< :key (lambda (s) (getf s :ord)))))
+                ;; attach props grouped by sense-id
+                (dolist (sense senses)
+                  (let ((sid (getf sense :sense-id)))
+                    (setf (getf sense :props)
+                          (let ((bag (make-hash-table :test 'equal)))
+                            (dolist (p (gethash sid props-by-id))
+                              (push (cadr p) (gethash (car p) bag)))
+                            (loop for k being the hash-keys of bag
+                                  collect (cons k (nreverse (gethash k bag))))))
+                    (remf sense :sense-id)))
+                (memo-set *senses-table* seq senses)))))
+      (length seqs)))))
+
 (defun cache-reset ()
   "Clear all memo tables (call from add-errata / tests when DB may have changed)."
   (dolist (tbl (list *entry-table* *posi-table* *uk-table* *conj-data-table*))
@@ -74,6 +147,9 @@
       (clrhash (memo-table-hash tbl))
       (setf (memo-table-hits tbl) 0
             (memo-table-misses tbl) 0)))
+  (setf *conj-batch* nil)
+  (clrhash *conj-prop-batch*)
+  (clrhash *csr-batch*)
   t)
 
 (defun cache-stats ()
@@ -150,3 +226,31 @@
             (let ((seq (ichiran/dict::seq row)))
               (memo-set *entry-table* seq row))))))
     (length seqs)))
+
+(defun prefetch-conj-data (seqs)
+  "Batch-load conjugation data for all SEQS in ~3 IN queries (the biggest
+   per-candidate cost after entries: get-conj-data fires conj-source-reading
+   + conj-prop per conjugation row). Fills a cache keyed by conj-id so
+   get-conj-data's per-row queries become cache hits. Returns count of
+   conj-ids prefetched."
+  (let ((seqs (remove-duplicates (remove nil seqs))))
+    (when seqs
+      ;; 1. conjugation rows for these seqs (one query)
+      (let ((conj-ids nil)
+            (conj-by-id (make-hash-table :test 'eql)))
+        (dolist (row (ichiran/dict::select-dao 'ichiran/dict::conjugation
+                                               (:in 'seq (:set seqs))))
+          (let ((id (ichiran/dict::id row)))
+            (push id conj-ids)
+            (setf (gethash id conj-by-id) row)))
+        (when conj-ids
+          ;; 2. conj-prop for all conj-ids (one query)
+          (dolist (p (ichiran/dict::select-dao 'ichiran/dict::conj-prop
+                                               (:in 'conj-id (:set conj-ids))))
+            (push p (gethash (ichiran/dict::conj-id p) *conj-prop-batch*)))
+          ;; 3. conj-source-reading for all conj-ids (one query)
+          (dolist (r (ichiran/dict::select-dao 'ichiran/dict::conj-source-reading
+                                               (:in 'conj-id (:set conj-ids))))
+            (push r (gethash (ichiran/dict::conj-id r) *csr-batch*)))
+          (setf *conj-batch* conj-by-id))
+        (length conj-ids)))))

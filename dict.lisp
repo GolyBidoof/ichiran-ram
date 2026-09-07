@@ -345,6 +345,44 @@
 "
   (when (or (eql from/conj-ids :root) (no-conj-data seq))
     (return-from get-conj-data nil))
+  ;; S2-v2: when the per-sentence conj batch is loaded (cache enabled +
+  ;; prefetch-conj-data ran), serve from it — zero DB queries. The batch is
+  ;; keyed by conj-id; rebuild the same conj-data structs get-conj-data would.
+  (when (and (cache-enabled-p) (find-package :ichiran/cache) (cache-call 'conj-batch))
+    (let* ((batch (cache-call 'conj-batch))
+           (conjs (cond ((null from/conj-ids)
+                         (loop for c being the hash-values of batch
+                               when (= (ichiran/dict::seq c) seq) collect c))
+                        ((listp from/conj-ids)
+                         (loop for c being the hash-values of batch
+                               when (and (= (ichiran/dict::seq c) seq)
+                                         (find (ichiran/dict::id c) from/conj-ids))
+                               collect c))
+                        (t (loop for c being the hash-values of batch
+                                 when (and (= (ichiran/dict::seq c) seq)
+                                           (= (ichiran/dict::seq-from c) from/conj-ids))
+                                 collect c)))))
+      (when conjs
+        (unless (listp texts) (setf texts (list texts)))
+        (return-from get-conj-data
+          (loop for conj in conjs
+                for src-map = (let ((rows (gethash (ichiran/dict::id conj)
+                                                   (cache-call 'csr-batch))))
+                                (if texts
+                                    (loop for r in rows
+                                          when (member (ichiran/dict::text r) texts :test 'equal)
+                                          collect (list (ichiran/dict::text r) (ichiran/dict::source-text r)))
+                                    (loop for r in rows
+                                          collect (list (ichiran/dict::text r) (ichiran/dict::source-text r)))))
+                when (or (not texts) src-map)
+                nconcing (loop for prop in (gethash (ichiran/dict::id conj)
+                                                    (cache-call 'conj-prop-batch))
+                               collect (make-conj-data :seq (ichiran/dict::seq conj)
+                                                       :from (ichiran/dict::seq-from conj)
+                                                       :via (let ((via (ichiran/dict::seq-via conj)))
+                                                              (if (eql via :null) nil via))
+                                                       :prop prop
+                                                       :src-map src-map)))))))
   (unless (listp texts)
     (setf texts (list texts)))
   (loop for conj in (cond
@@ -1147,7 +1185,12 @@
     (when (and (cache-enabled-p) (find-package :ichiran/cache))
       (let ((seqs (loop for v being the hash-values of substring-hash
                         nconc (loop for init in v when (getf (cdr init) :seq) collect (getf (cdr init) :seq)))))
-        (cache-call 'prefetch-seq-data seqs)))
+        (cache-call 'prefetch-seq-data seqs)
+        ;; S2-v2: batch conjugation data (the query-count killer: get-conj-data
+        ;; fires conj-source-reading + conj-prop per conjugation row).
+        (cache-call 'prefetch-conj-data seqs)
+        ;; S2-v2b: batch sense/gloss data (the :with-info query cost).
+        (cache-call 'prefetch-senses seqs)))
     (loop with sticky = sticky
           with substring-hash = substring-hash
           with katakana-groups = katakana-groups
@@ -1542,7 +1585,13 @@
 (defun simple-segment (str &key (limit 5))
   (caar (dict-segment str :limit limit)))
 
+(defvar *in-sense-cache* nil)
+
 (defun get-senses-raw (seq &aux (tags '("pos" "s_inf" "stagk" "stagr" "field")))
+  ;; S2-v2b: serve from the memoized/batched sense cache when enabled.
+  (when (and (not *in-sense-cache*) (cache-enabled-p) (find-package :ichiran/cache))
+    (let ((cached (cache-call 'ensure-senses seq)))
+      (when cached (return-from get-senses-raw cached))))
   (let* ((glosses
           (query (:order-by
                   (:select 'sense.ord (:raw "string_agg(gloss.text, '; ' ORDER BY gloss.ord)")
