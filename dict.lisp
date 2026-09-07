@@ -655,7 +655,12 @@
   (:documentation "conjugation data for word"))
 
 (defmethod word-conj-data ((word simple-text))
-  (get-conj-data (seq word) (word-conjugations word) (true-text word)))
+  (let ((seq (seq word))
+        (conjs (word-conjugations word))
+        (texts (true-text word)))
+    (if (cache-enabled-p)
+        (ichiran/cache:ensure-conj-data seq conjs texts)
+        (get-conj-data seq conjs texts))))
 
 (defmethod word-conj-data ((word compound-text))
   (word-conj-data (car (last (words word)))))
@@ -800,7 +805,9 @@
          (len (max 1 (the fixnum (mora-length text))))
          (seq (the (or null fixnum) (seq reading)))
          (ord (ord reading))
-         (entry (and seq (get-dao 'entry seq)))
+         (entry (and seq (cached-or-direct
+                          (lambda () (ichiran/cache:ensure-entry seq))
+                          (lambda () (get-dao 'entry seq)))))
          (conj-only (let ((wc (word-conjugations reading))) (and wc (not (eql wc :root)))))
          (root-p (or ctr-mode (and (not conj-only) (root-p entry))))
          (conj-data (word-conj-data reading))
@@ -820,11 +827,15 @@
          (seq-set (and seq (cons seq conj-of))) ;;(if root-p (list seq) (cons seq conj-of)))
          (sp-seq-set (if (and seq root-p (not use-length)) (list seq) seq-set))
          (prefer-kana
-          (select-dao 'sense-prop (:and (:in 'seq (:set sp-seq-set))
-                                        (:= 'tag "misc") (:= 'text "uk"))))
+          (cached-or-direct
+           (lambda () (ichiran/cache:ensure-uk sp-seq-set))
+           (lambda () (select-dao 'sense-prop (:and (:in 'seq (:set sp-seq-set))
+                                                    (:= 'tag "misc") (:= 'text "uk"))))))
          (is-arch (every 'is-arch sp-seq-set))
          (posi (if ctr-mode (list "ctr")
-                   (get-non-arch-posi seq-set)))
+                   (cached-or-direct
+                    (lambda () (ichiran/cache:ensure-posi seq-set))
+                    (lambda () (get-non-arch-posi seq-set)))))
          (common (if conj-only :null (common reading)))
          (common-of common)
          (common-p (not (eql common :null)))
@@ -1067,6 +1078,21 @@
                     (find-counter number counter :unique (not simple-words)))))))))
 
 (defparameter *score-cutoff* 5) ;; this must filter out ONLY bad kana spellings, and NOT filter out any kanji spellings
+
+;;; Perf: when enabled (and the ichiran/cache module is loaded), calc-score
+;;; serves entry / posi / uk / conj-data lookups from the S1 memo cache,
+;;; collapsing 139-1041 DB queries/sentence down to one-time fills.
+;;; Default OFF: zero behavior change. Enable with:
+;;;   (setf ichiran/dict::*use-cache-p* t)  after loading src/cache.lisp
+(defvar *use-cache-p* nil)
+
+(defun cache-enabled-p ()
+  (and *use-cache-p* (find-package :ichiran/cache)))
+
+(defun cached-or-direct (cached-fn direct-fn)
+  (if (cache-enabled-p)
+      (funcall cached-fn)
+      (funcall direct-fn)))
 
 (defun join-substring-words* (str)
   (loop with sticky = (find-sticky-positions str)
