@@ -536,20 +536,29 @@
           (let ((mem (funcall (symbol-function (intern "MEMDICT-FIND" pkg))
                               'kana-text word)))
             (when mem (return-from find-word mem))))))
-    (multiple-value-bind (inits present-p) (and *substring-hash* (gethash word *substring-hash*))
-      (if (and present-p (not root-only))
-          ;; The substring-hash fast path stores initarg plists per sentence;
-          ;; a stale hash across sentences can carry invalid initargs (e.g.
-          ;; after add-errata). Fall back to the DB query rather than crash.
-          (or (ignore-errors (loop for init in inits collect (apply 'make-instance init)))
-              (let ((table (if (test-word word :kana) 'kana-text 'kanji-text)))
-                (select-dao table (:= 'text word))))
-          (let ((table (if (test-word word :kana) 'kana-text 'kanji-text)))
-            (if root-only
-                (query-dao table (:select 'wt.* :from (:as table 'wt) :inner-join 'entry :on (:= 'wt.seq 'entry.seq)
-                                          :where (:and (:= 'text word)
-                                                       'root-p)))
-                (select-dao table (:= 'text word))))))))
+    ;; The substring-hash fast path stores initarg plists per sentence, seeded
+    ;; to NIL for every window part and filled only for DB hits. Distinguish
+    ;; "checked, not a dictionary word" (present with NIL value -> return NIL,
+    ;; no DB query) from "no hash bound" (direct DB query).
+    (multiple-value-bind (inits present-p)
+        (if *substring-hash*
+            (gethash word *substring-hash*)
+            (values nil nil))
+      (cond
+        ((and present-p (null inits) (not root-only))
+         nil)
+        ((and present-p (not root-only))
+         ;; A stale hash across sentences can carry invalid initargs (e.g.
+         ;; after add-errata). Fall back to the DB query rather than crash.
+         (or (ignore-errors (loop for init in inits collect (apply 'make-instance init)))
+             (let ((table (if (test-word word :kana) 'kana-text 'kanji-text)))
+               (select-dao table (:= 'text word)))))
+        (t (let ((table (if (test-word word :kana) 'kana-text 'kanji-text)))
+             (if root-only
+                 (query-dao table (:select 'wt.* :from (:as table 'wt) :inner-join 'entry :on (:= 'wt.seq 'entry.seq)
+                                           :where (:and (:= 'text word)
+                                                        'root-p)))
+                 (select-dao table (:= 'text word)))))))))
 
 (defun find-substring-words (str &key sticky)
   (let ((substring-hash (make-hash-table :test 'equal))
