@@ -97,3 +97,51 @@
 (defmethod ichiran/dict::seq-from ((obj compact-conj)) (compact-conj-from obj))
 (defmethod ichiran/dict::seq-via ((obj compact-conj)) (compact-conj-via obj))
 (defmethod ichiran/dict::id ((obj compact-conj)) (compact-conj-id obj))
+
+;; ---- adjoin-word (compound-word building) ----
+;; The analyzer builds compound words by adjoining readings. compact-kana /
+;; compact-kanji are structurally simple-text-like (get-text/get-kana/seq/
+;; word-conjugations all shimmed above), so mirror the simple-text adjoin:
+;; make a compound-text with the compact struct as primary.
+
+(defmethod ichiran/dict::adjoin-word ((word1 compact-kana) (word2 ichiran/dict::simple-text)
+                                      &key text kana score-mod score-base)
+  (ichiran/dict::make-instance 'ichiran/dict::compound-text
+                               :text text :kana kana :primary word1
+                               :words (list word1 word2)
+                               :score-mod score-mod :score-base score-base))
+
+(defmethod ichiran/dict::adjoin-word ((word1 compact-kanji) (word2 ichiran/dict::simple-text)
+                                      &key text kana score-mod score-base)
+  (ichiran/dict::make-instance 'ichiran/dict::compound-text
+                               :text text :kana kana :primary word1
+                               :words (list word1 word2)
+                               :score-mod score-mod :score-base score-base))
+
+(defmethod ichiran/dict::adjoin-word ((word1 compact-kana) (word2 compact-kana)
+                                      &key text kana score-mod score-base)
+  (ichiran/dict::make-instance 'ichiran/dict::compound-text
+                               :text text :kana kana :primary word1
+                               :words (list word1 word2)
+                               :score-mod score-mod :score-base score-base))
+
+(defmethod ichiran/dict::adjoin-word ((word1 compact-kanji) (word2 compact-kanji)
+                                      &key text kana score-mod score-base)
+  (ichiran/dict::make-instance 'ichiran/dict::compound-text
+                               :text text :kana kana :primary word1
+                               :words (list word1 word2)
+                               :score-mod score-mod :score-base score-base))
+
+(defmethod ichiran/dict::adjoin-word ((word1 compact-kana) (word2 compact-kanji)
+                                      &key text kana score-mod score-base)
+  (ichiran/dict::make-instance 'ichiran/dict::compound-text
+                               :text text :kana kana :primary word1
+                               :words (list word1 word2)
+                               :score-mod score-mod :score-base score-base))
+
+(defmethod ichiran/dict::adjoin-word ((word1 compact-kanji) (word2 compact-kana)
+                                      &key text kana score-mod score-base)
+  (ichiran/dict::make-instance 'ichiran/dict::compound-text
+                               :text text :kana kana :primary word1
+                               :words (list word1 word2)
+                               :score-mod score-mod :score-base score-base))
