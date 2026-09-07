@@ -659,7 +659,7 @@
         (conjs (word-conjugations word))
         (texts (true-text word)))
     (if (cache-enabled-p)
-        (ichiran/cache:ensure-conj-data seq conjs texts)
+        (cache-call 'ensure-conj-data seq conjs texts)
         (get-conj-data seq conjs texts))))
 
 (defmethod word-conj-data ((word compound-text))
@@ -806,7 +806,7 @@
          (seq (the (or null fixnum) (seq reading)))
          (ord (ord reading))
          (entry (and seq (cached-or-direct
-                          (lambda () (ichiran/cache:ensure-entry seq))
+                          (lambda () (cache-call 'ensure-entry seq))
                           (lambda () (get-dao 'entry seq)))))
          (conj-only (let ((wc (word-conjugations reading))) (and wc (not (eql wc :root)))))
          (root-p (or ctr-mode (and (not conj-only) (root-p entry))))
@@ -828,13 +828,13 @@
          (sp-seq-set (if (and seq root-p (not use-length)) (list seq) seq-set))
          (prefer-kana
           (cached-or-direct
-           (lambda () (ichiran/cache:ensure-uk sp-seq-set))
+           (lambda () (cache-call 'ensure-uk sp-seq-set))
            (lambda () (select-dao 'sense-prop (:and (:in 'seq (:set sp-seq-set))
                                                     (:= 'tag "misc") (:= 'text "uk"))))))
          (is-arch (every 'is-arch sp-seq-set))
          (posi (if ctr-mode (list "ctr")
                    (cached-or-direct
-                    (lambda () (ichiran/cache:ensure-posi seq-set))
+                    (lambda () (cache-call 'ensure-posi seq-set))
                     (lambda () (get-non-arch-posi seq-set)))))
          (common (if conj-only :null (common reading)))
          (common-of common)
@@ -1093,6 +1093,14 @@
   (if (cache-enabled-p)
       (funcall cached-fn)
       (funcall direct-fn)))
+
+(defun cache-call (fn-name &rest args)
+  "Call a function in the ichiran/cache package if it's loaded; else fall back to DIRECT-FN behavior.
+   Only used when cache-enabled-p is true."
+  (let ((pkg (find-package :ichiran/cache)))
+    (if pkg
+        (apply (symbol-function (intern (string fn-name) pkg)) args)
+        (error "ichiran/cache not loaded"))))
 
 (defun join-substring-words* (str)
   (loop with sticky = (find-sticky-positions str)
