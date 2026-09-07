@@ -490,7 +490,12 @@
   (when (<= (length word) *max-word-length*)
     (multiple-value-bind (inits present-p) (and *substring-hash* (gethash word *substring-hash*))
       (if (and present-p (not root-only))
-          (loop for init in inits collect (apply 'make-instance init))
+          ;; The substring-hash fast path stores initarg plists per sentence;
+          ;; a stale hash across sentences can carry invalid initargs (e.g.
+          ;; after add-errata). Fall back to the DB query rather than crash.
+          (or (ignore-errors (loop for init in inits collect (apply 'make-instance init)))
+              (let ((table (if (test-word word :kana) 'kana-text 'kanji-text)))
+                (select-dao table (:= 'text word))))
           (let ((table (if (test-word word :kana) 'kana-text 'kanji-text)))
             (if root-only
                 (query-dao table (:select 'wt.* :from (:as table 'wt) :inner-join 'entry :on (:= 'wt.seq 'entry.seq)
