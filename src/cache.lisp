@@ -14,7 +14,8 @@
   (:use #:cl #:postmodern #:ichiran/conn)
   (:export #:ensure-entry #:ensure-posi #:ensure-uk #:ensure-conj-data
            #:prefetch-seq-data #:prefetch-conj-data #:prefetch-senses
-           #:ensure-senses #:conj-batch
+           #:ensure-senses
+           #:conj-batch
            #:conj-prop-batch #:csr-batch #:cache-reset #:cache-stats))
 
 (in-package #:ichiran/cache)
@@ -140,6 +141,7 @@
                 (memo-set *senses-table* seq senses)))))
       (length seqs)))))
 
+
 (defun cache-reset ()
   "Clear all memo tables (call from add-errata / tests when DB may have changed)."
   (dolist (tbl (list *entry-table* *posi-table* *uk-table* *conj-data-table*))
@@ -157,7 +159,8 @@
   (list :entry (list (memo-table-hits *entry-table*) (memo-table-misses *entry-table*))
         :posi (list (memo-table-hits *posi-table*) (memo-table-misses *posi-table*))
         :uk (list (memo-table-hits *uk-table*) (memo-table-misses *uk-table*))
-        :conj-data (list (memo-table-hits *conj-data-table*) (memo-table-misses *conj-data-table*))))
+        :conj-data (list (memo-table-hits *conj-data-table*) (memo-table-misses *conj-data-table*))
+        :senses (list (memo-table-hits *senses-table*) (memo-table-misses *senses-table*))))
 
 ;;; Normalize a seq-set list into a stable key: sorted copy.
 (defun normalize-seq-set (seq-set)
