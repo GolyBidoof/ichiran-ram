@@ -343,8 +343,32 @@
   "from/conj-ids can be either from which word to find conjugations or a list of conj-ids
    texts is a string or list of strings, if supplied, only the conjs that have src-map with this text will be collected
 "
-  (when (or (eql from/conj-ids :root) (no-conj-data seq))
+  (when (or (eql from/conj-ids :root)
+            (if (and *memdict-p* (find-package :ichiran/memdict-compact))
+                (not (memdict-call 'memdict-has-conj-p seq))
+                (no-conj-data seq)))
     (return-from get-conj-data nil))
+  ;; R5: serve from the in-RAM dict when *memdict-p* is on (full load).
+  (when (and *memdict-p* (find-package :ichiran/memdict-compact))
+    (let ((ram (memdict-call 'memdict-conj-data seq from/conj-ids)))
+      (when ram
+        (unless (listp texts) (setf texts (list texts)))
+        (return-from get-conj-data
+          (loop for (conj src-map props) in ram
+                for fsrc-map = (if texts
+                                   (loop for row in src-map
+                                         for txt = (car row) for src-txt = (cadr row)
+                                         when (find txt texts :test 'equal)
+                                         collect (list txt src-txt))
+                                   (mapcar (lambda (row) (list (car row) (cadr row))) src-map))
+                when (or (not texts) fsrc-map)
+                nconcing (loop for prop in props
+                               collect (make-conj-data :seq (seq conj)
+                                                       :from (seq-from conj)
+                                                       :via (let ((via (seq-via conj)))
+                                                              (if (eql via :null) nil via))
+                                                       :prop prop
+                                                       :src-map fsrc-map)))))))
   ;; S2-v2: when the per-sentence conj batch is loaded (cache enabled +
   ;; prefetch-conj-data ran), serve from it — zero DB queries. The batch is
   ;; keyed by conj-id; rebuild the same conj-data structs get-conj-data would.
@@ -526,15 +550,17 @@
 
 (defun find-word (word &key root-only)
   (when (<= (length word) *max-word-length*)
-    ;; S3/R1: serve kana lookups from the in-memory dict when enabled (avoids
-    ;; the DB for the common kana path). Prefers the compact struct module
-    ;; (:ichiran/memdict-compact), falls back to the DAO module.
-    (when (and (not root-only) *memdict-p* (test-word word :kana))
+    ;; S3/R1/R5: serve lookups from the in-memory dict when enabled (avoids
+    ;; the DB for the common paths). kana -> kana_text index, kanji -> kanji
+    ;; index. Prefers the compact struct module (:ichiran/memdict-compact),
+    ;; falls back to the DAO module.
+    (when (and (not root-only) *memdict-p*)
       (let ((pkg (or (find-package :ichiran/memdict-compact)
                      (find-package :ichiran/memdict))))
         (when pkg
           (let ((mem (funcall (symbol-function (intern "MEMDICT-FIND" pkg))
-                              'kana-text word)))
+                              (if (test-word word :kana) 'kana-text 'kanji-text)
+                              word)))
             (when mem (return-from find-word mem))))))
     ;; The substring-hash fast path stores initarg plists per sentence, seeded
     ;; to NIL for every window part and filled only for DB hits. Distinguish
@@ -867,9 +893,10 @@
          (len (max 1 (the fixnum (mora-length text))))
          (seq (the (or null fixnum) (seq reading)))
          (ord (ord reading))
-         (entry (and seq (cached-or-direct
-                          (lambda () (cache-call 'ensure-entry seq))
-                          (lambda () (get-dao 'entry seq)))))
+         (entry (and seq (or (memdict-call 'memdict-entry-by-seq seq)
+                             (cached-or-direct
+                              (lambda () (cache-call 'ensure-entry seq))
+                              (lambda () (get-dao 'entry seq))))))
          (conj-only (let ((wc (word-conjugations reading))) (and wc (not (eql wc :root)))))
          (root-p (or ctr-mode (and (not conj-only) (root-p entry))))
          (conj-data (word-conj-data reading))
@@ -889,15 +916,26 @@
          (seq-set (and seq (cons seq conj-of))) ;;(if root-p (list seq) (cons seq conj-of)))
          (sp-seq-set (if (and seq root-p (not use-length)) (list seq) seq-set))
          (prefer-kana
-          (cached-or-direct
-           (lambda () (cache-call 'ensure-uk sp-seq-set))
-           (lambda () (select-dao 'sense-prop (:and (:in 'seq (:set sp-seq-set))
-                                                    (:= 'tag "misc") (:= 'text "uk"))))))
+          (if *memdict-p*
+              (or (memdict-call 'memdict-uk sp-seq-set)
+                  (cached-or-direct
+                   (lambda () (cache-call 'ensure-uk sp-seq-set))
+                   (lambda () (select-dao 'sense-prop (:and (:in 'seq (:set sp-seq-set))
+                                                            (:= 'tag "misc") (:= 'text "uk"))))))
+              (cached-or-direct
+               (lambda () (cache-call 'ensure-uk sp-seq-set))
+               (lambda () (select-dao 'sense-prop (:and (:in 'seq (:set sp-seq-set))
+                                                        (:= 'tag "misc") (:= 'text "uk")))))))
          (is-arch (every 'is-arch sp-seq-set))
          (posi (if ctr-mode (list "ctr")
-                   (cached-or-direct
-                    (lambda () (cache-call 'ensure-posi seq-set))
-                    (lambda () (get-non-arch-posi seq-set)))))
+                   (if *memdict-p*
+                       (or (memdict-call 'memdict-non-arch-posi seq-set)
+                           (cached-or-direct
+                            (lambda () (cache-call 'ensure-posi seq-set))
+                            (lambda () (get-non-arch-posi seq-set))))
+                       (cached-or-direct
+                        (lambda () (cache-call 'ensure-posi seq-set))
+                        (lambda () (get-non-arch-posi seq-set))))))
          (common (if conj-only :null (common reading)))
          (common-of common)
          (common-p (not (eql common :null)))
@@ -1163,6 +1201,16 @@
     (if pkg
         (apply (symbol-function (intern (string fn-name) pkg)) args)
         (error "ichiran/cache not loaded"))))
+
+(defun memdict-call (fn-name &rest args)
+  "Call FN-NAME in the ichiran/memdict-compact package when *memdict-p* is on
+   and the package is loaded; otherwise return NIL (caller falls back to DB).
+   R5: routes the analyzer's hot DB lookups (entry, posi, uk, senses, conj)
+   to the in-RAM dictionary."
+  (when (and *memdict-p* (find-package :ichiran/memdict-compact))
+    (let ((fn (find-symbol (string fn-name) :ichiran/memdict-compact)))
+      (when (fboundp fn)
+        (apply fn args)))))
 
 ;;; Perf: S4 trie — when enabled (and ichiran/trie is loaded), the inner
 ;;; window loop in join-substring-words* only probes (start,end) pairs that
@@ -1604,6 +1652,10 @@
 (defvar *in-sense-cache* nil)
 
 (defun get-senses-raw (seq &aux (tags '("pos" "s_inf" "stagk" "stagr" "field")))
+  ;; R5: serve from the in-RAM dict when *memdict-p* is on (full load).
+  (when (and *memdict-p* (find-package :ichiran/memdict-compact))
+    (let ((ram (memdict-call 'memdict-senses-raw seq)))
+      (when ram (return-from get-senses-raw ram))))
   ;; S2-v2b: serve from the memoized/batched sense cache when enabled.
   (when (and (not *in-sense-cache*) (cache-enabled-p) (find-package :ichiran/cache))
     (let ((cached (cache-call 'ensure-senses seq)))

@@ -69,7 +69,7 @@
 (defstruct compact-gloss
   id sense-id text ord)
 (defstruct compact-sense-prop
-  id sense-id tag text ord)
+  id sense-id tag text ord seq)
 
 ;;; ---- indexes ----
 
@@ -106,8 +106,10 @@
   (let ((before (sb-kernel:dynamic-usage)))
     (with-db-connection (conn)
       (flet ((load-table (table maker)
+               ;; entry has no id column (key is seq); others order by id.
+               ;; ordering is irrelevant for hash loading, so omit it.
                (loop with offset = 0
-                     for rows = (query (format nil "SELECT * FROM ~a ORDER BY id LIMIT ~a OFFSET ~a"
+                     for rows = (query (format nil "SELECT * FROM ~a LIMIT ~a OFFSET ~a"
                                                table chunk offset)
                                        :lists)
                      while rows
@@ -186,10 +188,11 @@
           (format t "memdict-compact: loading sense_prop...~%")
           (load-table "sense_prop"
                       (lambda (pl)
-                        (destructuring-bind (id sense-id tag text ord) pl
+                        (destructuring-bind (id tag sense-id text ord seq) pl
                           (let ((sp (make-compact-sense-prop :id id :sense-id sense-id
                                                              :tag (intern-text tag)
-                                                             :text (intern-text text) :ord ord)))
+                                                             :text (intern-text text) :ord ord
+                                                             :seq seq)))
                             (push sp (gethash sense-id *prop-by-sense*)))))))))
     (let ((after (sb-kernel:dynamic-usage)))
       (format t "memdict-compact load: ~,1f MB delta~%"
@@ -312,35 +315,38 @@
       (nreverse result))))
 
 (defun memdict-uk (seq-set)
-  "Mirror select-dao sense-prop uk: list of (seq . sense-prop) rows for seqs
-   in SEQ-SET with tag misc text uk."
+  "Mirror select-dao sense-prop uk: list of compact-sense-prop rows for seqs
+   in SEQ-SET with tag misc text uk (callers use sense-id on the rows)."
   (loop for seq in seq-set
         nconc (loop for sense in (gethash seq *sense-by-seq*)
                     nconc (loop for p in (gethash (compact-sense-id sense) *prop-by-sense*)
                                 when (and (equal (compact-sense-prop-tag p) "misc")
                                           (equal (compact-sense-prop-text p) "uk"))
-                                collect (cons seq p)))))
+                                collect p))))
 
 (defun memdict-has-conj-p (seq)
   "T whether SEQ has any conjugation rows."
   (not (null (gethash seq *conj-by-seq*))))
 
-(defun memdict-conj-data (seq &optional from/conj-ids texts)
-  "Mirror ichiran/dict::get-conj-data's return: list of
-   (list conj fprops src-map) — actually mirror the shape used by
-   select-conjs-and-props: list of (conj fprops val)."
-  ;; Simplest faithful shape: return (list conj) where conj is a compact-conj,
-  ;; plus conj-props and csr rows; the caller (dict.lisp) will be adapted.
-  (let ((conjs (if (null from/conj-ids)
-                   (gethash seq *conj-by-seq*)
-                   (if (listp from/conj-ids)
-                       (loop for c in (gethash seq *conj-by-seq*)
-                             when (member (compact-conj-id c) from/conj-ids)
-                               collect c)
-                       (loop for c in (gethash seq *conj-by-seq*)
-                             when (= (compact-conj-from c) from/conj-ids)
-                               collect c)))))
+(defun memdict-conj-data (seq &optional from/conj-ids)
+  "Return list of (conj src-map props) for SEQ filtered by FROM/CONJ-IDS:
+   - conj    : compact-conj
+   - src-map : list of (text . source-text) from conj_source_reading
+   - props   : list of compact-conj-prop
+   Mirrors the raw pieces ichiran/dict::get-conj-data's DB path reads."
+  (let ((conjs (cond ((null from/conj-ids)
+                      (gethash seq *conj-by-seq*))
+                     ((listp from/conj-ids)
+                      (loop for c in (gethash seq *conj-by-seq*)
+                            when (member (compact-conj-id c) from/conj-ids)
+                              collect c))
+                     (t (loop for c in (gethash seq *conj-by-seq*)
+                              when (= (compact-conj-from c) from/conj-ids)
+                                collect c)))))
     (loop for conj in conjs
           collect (list conj
-                        (gethash (compact-conj-id conj) *conj-prop-by-id*)
-                        (gethash (compact-conj-id conj) *csr-by-id*)))))
+                        (loop for r in (gethash (compact-conj-id conj) *csr-by-id*)
+                              collect (list (compact-csr-text r)
+                                            (compact-csr-source-text r)))
+                        (sort (copy-list (gethash (compact-conj-id conj) *conj-prop-by-id*))
+                              '< :key 'compact-conj-prop-id)))))
