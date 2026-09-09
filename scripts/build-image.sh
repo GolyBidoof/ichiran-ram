@@ -38,6 +38,10 @@ case "${PRESET:-}" in
 esac
 TABLES="${TABLES:-\"kana_text\"}"
 TRIE_TABLES="${TRIE_TABLES:-}"
+# SYSTEM=1: bake the full analyzer (:ichiran + shims, *memdict-p* on) into the
+# image too — a single file that romanizes with no quickload and no DB for
+# covered paths. Needs more heap (analyzer baseline + dict + dump headroom).
+SYSTEM="${SYSTEM:-}"
 DB_NAME="${ICHIRAN_DB_NAME:-jmdict}"
 DB_USER="${ICHIRAN_DB_USER:-jmdict}"
 DB_PASS="${ICHIRAN_DB_PASSWORD:-password}"
@@ -46,6 +50,13 @@ if [ -n "$TRIE_TABLES" ]; then
   TRIE_LISP="(ichiran/memdict-compact:memdict-build-trie :tables (list $TRIE_TABLES))"
 else
   TRIE_LISP="(format t \"no baked trie (TRIE_TABLES empty)~%\")"
+fi
+if [ -n "$SYSTEM" ]; then
+  SYSTEM_LISP='(ql:quickload :ichiran :silent t)'
+  SYSTEM_TAIL='(load "src/memdict-compact-shims.lisp") (setf ichiran/dict::*memdict-p* t)'
+else
+  SYSTEM_LISP='(format t "bare core (no analyzer baked in)~%")'
+  SYSTEM_TAIL='(format t "no shims (bare core)~%")'
 fi
 SBCL_VER="$(scripts/sbcl-wrapped --version 2>/dev/null | head -1 || echo unknown)"
 GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -59,6 +70,7 @@ trap 'rm -f "$BUILD_LISP"' EXIT INT TERM
 
 cat > "$BUILD_LISP" <<EOF
 (ql:quickload :postmodern :silent t)
+$SYSTEM_LISP
 (load "src/memdict-compact.lisp")
 (load "src/trie.lisp")
 (in-package :cl-user)
@@ -70,6 +82,7 @@ cat > "$BUILD_LISP" <<EOF
 ;; Optional baked trie (TRIE_TABLES='"kana_text"' etc.): prefix index over the
 ;; RAM text keys so per-sentence seeding skips non-dict windows with no DB.
 $TRIE_LISP
+$SYSTEM_TAIL
 ;; drop the DB connection (serving is DB-free)
 (postmodern:clear-connection-pool)
 (format t "CORE_BUILD_READY~%")

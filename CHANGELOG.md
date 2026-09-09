@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Profiled page serving under lite RAM with sb-sprof: ~81% of wall time is
+  Postgres socket I/O, Lisp hotspots under 2% each. Query-killing outranks
+  all CPU work; see worklogs/R6-REPORT.md.
+- `SYSTEM=1` build knob (`scripts/build-image.sh`): bakes analyzer + shims
+  + dict + `*memdict-p*` into one core. System-lite core (175MB) cold-starts
+  to first romanize in ~2s with no quickload and no DB (was ~9 minutes).
+- `scripts/serve-system.sh`: persistent stdin-to-romanize server on the
+  system core (~25ms/sentence warm). Protocol: ignore lines until
+  `{"ready":true}` (SBCL banner precedes it; `--quiet` is unusable with
+  `--core`).
+
 - In-RAM dictionary (`src/memdict-compact.lisp`): hot dictionary tables load
   as compact structs with per-access-pattern indexes; new `ichiran/ram`
   ASDF system (in `ichiran.asd`) so `(ql:quickload :ichiran/ram)` replaces

@@ -29,7 +29,9 @@
            ;; R6b: row accessors API consumers may need (uk/conj paths)
            #:compact-kana-id #:compact-kanji-id
            #:compact-conj-id #:compact-conj-seq #:compact-conj-from #:compact-conj-via
-           #:compact-sense-prop-id #:compact-sense-prop-sense-id #:compact-sense-prop-seq))
+           #:compact-sense-prop-id #:compact-sense-prop-sense-id #:compact-sense-prop-seq
+           ;; R7 integer backend registry
+           #:int-register-text-table #:int-table-loaded-p #:*int-tables*))
 
 (in-package #:ichiran/memdict-compact)
 
@@ -299,6 +301,10 @@
     (setf *loaded-tables* (union *loaded-tables* tables :test 'equal))
     (memdict-stats)))
 
+(defvar *int-tables* (make-hash-table :test 'equal)
+  "table name (kana_text/kanji_text, underscores) -> int-text-table.
+   Defined early: memdict-reset clears it (declared before use).")
+
 (defun memdict-reset ()
   "Clear ALL loaded dict data (for benchmarking partial loads)."
   (clrhash *kana-by-text*) (clrhash *kana-by-seq*)
@@ -306,7 +312,7 @@
   (clrhash *entry-by-seq*) (clrhash *conj-by-seq*) (clrhash *conj-by-from*)
   (clrhash *conj-prop-by-id*) (clrhash *csr-by-id*)
   (clrhash *sense-by-seq*) (clrhash *gloss-by-sense*) (clrhash *prop-by-sense*)
-  (clrhash *string-pool*)
+  (clrhash *string-pool*) (clrhash *int-tables*)
   (setf *loaded-tables* nil)
   t)
 
@@ -348,22 +354,81 @@
   "Fresh list spine AND fresh row copies."
   (mapcar 'memdict-copy-row rows))
 
+;;; ---- R7: integer-table backend (src/memdict-int.lisp) ----
+;;; (*int-tables* is defvarred above memdict-reset, which clears it.)
+;;; When an integer table is registered for kana_text/kanji_text, struct-path
+;;; lookups decode from it (fresh structs every call: copy-on-return is free).
+;;; Text-only probes go straight to the integer index (no decode).
+
+(defun int-table-loaded-p (table)
+  "T when an integer table is registered for TABLE (underscored name)."
+  (nth-value 1 (gethash table *int-tables*)))
+
+(defun int-register-text-table (table int-table)
+  "Register INT-TEXT-TABLE (from ichiran/memdict-int:int-load-text) for TABLE.
+   Also records TABLE in *loaded-tables* so table gating (memdict-call,
+   memdict-table-loaded-p) treats the integer backend as loaded."
+  (setf (gethash table *int-tables*) int-table)
+  (pushnew table *loaded-tables* :test 'equal)
+  table)
+
+(defun int-fn (name)
+  "Resolve NAME in ichiran/memdict-int, or NIL if not loaded."
+  (let ((pkg (find-package :ichiran/memdict-int)))
+    (when pkg
+      (let ((sym (find-symbol (string name) pkg)))
+        (when (and sym (fboundp sym)) (symbol-function sym))))))
+
+(defun decode-int-row (kana-p plist)
+  "Build a compact-kana/kanji struct from an int-text-row plist."
+  (if kana-p
+      (make-compact-kana :id (getf plist :id) :seq (getf plist :seq)
+                         :text (getf plist :text) :ord (getf plist :ord)
+                         :common (getf plist :common)
+                         :common-tags (getf plist :common-tags)
+                         :conjugate-p (getf plist :conjugate-p)
+                         :nokanji (getf plist :nokanji)
+                         :best-kanji (or (getf plist :best-kanji) :null))
+      (make-compact-kanji :id (getf plist :id) :seq (getf plist :seq)
+                          :text (getf plist :text) :ord (getf plist :ord)
+                          :common (getf plist :common)
+                          :common-tags (getf plist :common-tags)
+                          :conjugate-p (getf plist :conjugate-p)
+                          :nokanji (getf plist :nokanji)
+                          :best-kana (or (getf plist :best-kana) :null))))
+
 (defun memdict-find (table text)
   "Rows for TEXT (fresh copies; the analyzer mutates readings). NIL if none."
   (let ((name (string-downcase (symbol-name table))))
     (cond ((or (string= name "kana-text") (string= name "kana_text"))
-           (memdict-copy-rows (gethash text *kana-by-text*)))
+           (or (let ((it (gethash "kana_text" *int-tables*)))
+                 (when it
+                   (mapcar (lambda (pl) (decode-int-row t pl))
+                           (funcall (int-fn 'int-text-find-rows) it text))))
+               (memdict-copy-rows (gethash text *kana-by-text*))))
           ((or (string= name "kanji-text") (string= name "kanji_text"))
-           (memdict-copy-rows (gethash text *kanji-by-text*)))
+           (or (let ((it (gethash "kanji_text" *int-tables*)))
+                 (when it
+                   (mapcar (lambda (pl) (decode-int-row nil pl))
+                           (funcall (int-fn 'int-text-find-rows) it text))))
+               (memdict-copy-rows (gethash text *kanji-by-text*))))
           (t nil))))
 
 (defun memdict-find-by-seq (table seq)
   "Rows for SEQ (fresh copies; the analyzer mutates readings). NIL if none."
   (let ((name (string-downcase (symbol-name table))))
     (cond ((or (string= name "kana-text") (string= name "kana_text"))
-           (memdict-copy-rows (gethash seq *kana-by-seq*)))
+           (or (let ((it (gethash "kana_text" *int-tables*)))
+                 (when it
+                   (mapcar (lambda (pl) (decode-int-row t pl))
+                           (funcall (int-fn 'int-text-find-by-seq) it seq))))
+               (memdict-copy-rows (gethash seq *kana-by-seq*))))
           ((or (string= name "kanji-text") (string= name "kanji_text"))
-           (memdict-copy-rows (gethash seq *kanji-by-seq*)))
+           (or (let ((it (gethash "kanji_text" *int-tables*)))
+                 (when it
+                   (mapcar (lambda (pl) (decode-int-row nil pl))
+                           (funcall (int-fn 'int-text-find-by-seq) it seq))))
+               (memdict-copy-rows (gethash seq *kanji-by-seq*))))
           (t nil))))
 
 (defun memdict-conj-by-seq (seq) (gethash seq *conj-by-seq*))
@@ -481,8 +546,10 @@
 ;;; on *loaded-tables* (kana-only cores must still serve kana sides).
 
 (defun memdict-table-loaded-p (table)
-  "T when TABLE (string) was loaded into RAM."
-  (member table *loaded-tables* :test 'equal))
+  "T when TABLE (string) was loaded into RAM, via struct hashes or integer
+   tables (either backend satisfies table gating)."
+  (or (member table *loaded-tables* :test 'equal)
+      (int-table-loaded-p table)))
 
 (defun memdict-text-by-seq (table seq &optional (ord 0))
   "First TEXT for SEQ with ORD in TABLE. TABLE is kana-text/kanji-text (symbol
@@ -491,14 +558,18 @@
   (let ((name (string-downcase (symbol-name table))))
     (cond ((and (or (string= name "kana-text") (string= name "kana_text"))
                 (memdict-table-loaded-p "kana_text"))
-           (loop for r in (gethash seq *kana-by-seq*)
-                 when (= (compact-kana-ord r) ord)
-                   do (return (compact-kana-text r))))
+           (or (let ((it (gethash "kana_text" *int-tables*)))
+                 (when it (funcall (int-fn 'int-text-by-seq) it seq ord)))
+               (loop for r in (gethash seq *kana-by-seq*)
+                     when (= (compact-kana-ord r) ord)
+                       do (return (compact-kana-text r)))))
           ((and (or (string= name "kanji-text") (string= name "kanji_text"))
                 (memdict-table-loaded-p "kanji_text"))
-           (loop for r in (gethash seq *kanji-by-seq*)
-                 when (= (compact-kanji-ord r) ord)
-                   do (return (compact-kanji-text r)))))))
+           (or (let ((it (gethash "kanji_text" *int-tables*)))
+                 (when it (funcall (int-fn 'int-text-by-seq) it seq ord)))
+               (loop for r in (gethash seq *kanji-by-seq*)
+                     when (= (compact-kanji-ord r) ord)
+                       do (return (compact-kanji-text r))))))))
 
 (defun memdict-find-by-seq-text (table seq text)
   "Rows for SEQ with TEXT in TABLE (ascending id = DB select-dao order).
@@ -507,14 +578,24 @@
   (let ((name (string-downcase (symbol-name table))))
     (cond ((and (or (string= name "kana-text") (string= name "kana_text"))
                 (memdict-table-loaded-p "kana_text"))
-           (loop for r in (gethash seq *kana-by-seq*)
-                 when (equal (compact-kana-text r) text)
-                   collect (copy-compact-kana r)))
+           (or (let ((it (gethash "kana_text" *int-tables*)))
+                 (when it
+                   (loop for pl in (funcall (int-fn 'int-text-find-by-seq) it seq)
+                         when (equal (getf pl :text) text)
+                           collect (decode-int-row t pl))))
+               (loop for r in (gethash seq *kana-by-seq*)
+                     when (equal (compact-kana-text r) text)
+                       collect (copy-compact-kana r))))
           ((and (or (string= name "kanji-text") (string= name "kanji_text"))
                 (memdict-table-loaded-p "kanji_text"))
-           (loop for r in (gethash seq *kanji-by-seq*)
-                 when (equal (compact-kanji-text r) text)
-                   collect (copy-compact-kanji r))))))
+           (or (let ((it (gethash "kanji_text" *int-tables*)))
+                 (when it
+                   (loop for pl in (funcall (int-fn 'int-text-find-by-seq) it seq)
+                         when (equal (getf pl :text) text)
+                           collect (decode-int-row nil pl))))
+               (loop for r in (gethash seq *kanji-by-seq*)
+                     when (equal (compact-kanji-text r) text)
+                        collect (copy-compact-kanji r)))))))
 
 (defun memdict-rows-by-seq (table seq)
   "All rows for SEQ in TABLE ordered by ord (ascending id ties).
@@ -523,12 +604,20 @@
   (let ((name (string-downcase (symbol-name table))))
     (cond ((and (or (string= name "kana-text") (string= name "kana_text"))
                 (memdict-table-loaded-p "kana_text"))
-           (stable-sort (memdict-copy-rows (gethash seq *kana-by-seq*))
-                        '< :key 'compact-kana-ord))
+           (or (let ((it (gethash "kana_text" *int-tables*)))
+                 (when it
+                   (mapcar (lambda (pl) (decode-int-row t pl))
+                           (funcall (int-fn 'int-text-rows-by-seq) it seq))))
+               (stable-sort (memdict-copy-rows (gethash seq *kana-by-seq*))
+                            '< :key 'compact-kana-ord)))
           ((and (or (string= name "kanji-text") (string= name "kanji_text"))
                 (memdict-table-loaded-p "kanji_text"))
-           (stable-sort (memdict-copy-rows (gethash seq *kanji-by-seq*))
-                        '< :key 'compact-kanji-ord)))))
+           (or (let ((it (gethash "kanji_text" *int-tables*)))
+                 (when it
+                   (mapcar (lambda (pl) (decode-int-row nil pl))
+                           (funcall (int-fn 'int-text-rows-by-seq) it seq))))
+               (stable-sort (memdict-copy-rows (gethash seq *kanji-by-seq*))
+                            '< :key 'compact-kanji-ord))))))
 
 (defun memdict-select-conjs (seq &optional conj-ids)
   "Mirror ichiran/dict::select-conjs: conjugation rows for SEQ; with
