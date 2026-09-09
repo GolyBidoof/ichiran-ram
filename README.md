@@ -141,3 +141,12 @@ ichiran wa saikō da zo
 There is no documentation yet. Any API is considered unstable at this point.
 
 The basic functionality is `(ichiran:romanize "一覧は最高だぞ" :with-info t)`, but feel free to explore further.
+
+### This fork: in-RAM dictionary & zero-DB serving
+
+Why a fork at all: [docs/WHY-FORK.md](docs/WHY-FORK.md).
+See [docs/RAM-DICTIONARY.md](docs/RAM-DICTIONARY.md) for the full guide:
+running hot dictionary lookups from RAM (all flags default OFF, so default
+behavior is unchanged), per-table memory/query tradeoffs, building `lite`
+and full serving cores, and the verification gates (`parity.sh`,
+`golden-diff.sh`, per-load `MEMDICT-VERIFY-OK` row counts).

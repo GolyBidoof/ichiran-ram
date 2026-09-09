@@ -680,3 +680,201 @@
   (init-all-caches t)
   (init-suffixes t)
   (run-parallel-tests))
+
+;;;; R6: in-RAM dictionary unit tests (no DB, no multi-GB loads).
+;;;; The memdict package is NOT loaded by plain `quickload :ichiran`, so every
+;;;; reference below resolves at RUNTIME (find-symbol/funcall). The test loads
+;;;; src/memdict-compact.lisp bare (postmodern only) when needed, builds small
+;;;; fixtures straight into the RAM indexes, and cleans up with memdict-reset.
+;;;; Thread-safety: *memdict-p* is LET-bound (thread-local); other parallel
+;;;; tests gate on it being nil and never observe fixture state.
+
+(defun ram-pkg ()
+  "The memdict package, loading src/memdict-compact.lisp bare if needed."
+  (or (find-package :ichiran/memdict-compact)
+      (progn
+        (load (asdf:system-relative-pathname :ichiran "src/memdict-compact.lisp"))
+        (find-package :ichiran/memdict-compact))))
+
+(defun ram-call (name &rest args)
+  "funcall NAME (symbol or string) in the memdict package."
+  (apply (symbol-function (find-symbol (string name) :ichiran/memdict-compact))
+         args))
+
+(defun ram-get (name)
+  "symbol-value of NAME in the memdict package."
+  (symbol-value (find-symbol (string name) :ichiran/memdict-compact)))
+
+(defun (setf ram-get) (value name)
+  (setf (symbol-value (find-symbol (string name) :ichiran/memdict-compact))
+        value))
+
+(define-test ram-gating-test
+  ;; With nothing loaded, every RAM path falls back (returns NIL).
+  (assert-equal nil (ichiran/dict::memdict-call 'memdict-entry-by-seq 1))
+  (assert-equal nil (ichiran/dict::memdict-call 'memdict-senses-raw 1))
+  (assert-equal nil (ichiran/dict::memdict-table-loaded-p "entry"))
+  (assert-equal nil (ichiran/dict::memdict-table-loaded-p "sense" "gloss")))
+
+(define-test ram-helpers-test
+  (ram-pkg) ; ensure loaded (bare is fine)
+  (let ((ichiran/dict::*memdict-p* t))
+    (unwind-protect
+         (progn
+           ;; ---- kana fixture: text with 2 rows (ords 1, 0 pushed in order)
+           (let ((r1 (ram-call 'make-compact-kana :id 2 :seq 100 :text "あい" :ord 1))
+                 (r2 (ram-call 'make-compact-kana :id 1 :seq 100 :text "あい" :ord 0)))
+             (push r1 (gethash "あい" (ram-get '*kana-by-text*)))
+             (push r2 (gethash "あい" (ram-get '*kana-by-text*)))
+             (push r1 (gethash 100 (ram-get '*kana-by-seq*)))
+             (push r2 (gethash 100 (ram-get '*kana-by-seq*))))
+           (setf (ram-get '*loaded-tables*) '("kana_text"))
+           ;; find returns rows, as copies (mutating one leaves index intact)
+           (let ((found (ram-call 'memdict-find 'kana-text "あい")))
+             (assert-equal 2 (length found))
+             (let ((again (ram-call 'memdict-find 'kana-text "あい")))
+               (assert-false (eq (car found) (car again)))
+               (assert-false (eq (car found)
+                                 (car (gethash "あい" (ram-get '*kana-by-text*)))))))
+           ;; ord-0 text + ord-ordered rows + seq+text filter
+           (assert-equal "あい" (ram-call 'memdict-text-by-seq 'kana-text 100))
+           (assert-equal '(0 1) (mapcar (ram-call-find-accessor 'compact-kana-ord)
+                                        (ram-call 'memdict-rows-by-seq 'kana-text 100)))
+           (assert-equal 2 (length (ram-call 'memdict-find-by-seq-text 'kana-text 100 "あい")))
+           (assert-equal nil (ram-call 'memdict-find-by-seq-text 'kana-text 100 "ない"))
+           ;; unloaded side self-gates to NIL (caller uses the DB)
+           (assert-equal nil (ram-call 'memdict-text-by-seq 'kanji-text 100))
+           ;; ---- sense trio fixture
+           (let ((s1 (ram-call 'make-compact-sense :id 10 :seq 200 :ord 1))
+                 (s2 (ram-call 'make-compact-sense :id 9 :seq 200 :ord 0))
+                 (g1 (ram-call 'make-compact-gloss :id 1 :sense-id 9 :text "second" :ord 1))
+                 (g2 (ram-call 'make-compact-gloss :id 2 :sense-id 9 :text "first" :ord 0))
+                 (p1 (ram-call 'make-compact-sense-prop :id 1 :sense-id 9
+                               :tag "pos" :text "n" :ord 0 :seq 200))
+                 (p2 (ram-call 'make-compact-sense-prop :id 2 :sense-id 9
+                               :tag "misc" :text "uk" :ord 1 :seq 200)))
+             (dolist (s (list s1 s2)) (push s (gethash 200 (ram-get '*sense-by-seq*))))
+             (dolist (g (list g1 g2)) (push g (gethash 9 (ram-get '*gloss-by-sense*))))
+             (dolist (p (list p1 p2)) (push p (gethash 9 (ram-get '*prop-by-sense*)))))
+           (setf (ram-get '*loaded-tables*) '("kana_text" "sense" "gloss" "sense_prop"))
+           ;; trio-gated: senses-raw serves only with all three tables
+           (setf (ram-get '*loaded-tables*) '("sense"))
+           (assert-equal nil (ichiran/dict::memdict-call 'memdict-senses-raw 200))
+           (setf (ram-get '*loaded-tables*) '("kana_text" "sense" "gloss" "sense_prop"))
+           (let ((raw (ram-call 'memdict-senses-raw 200)))
+             (assert-equal 2 (length raw))
+             (assert-equal 0 (getf (first raw) :ord))
+             (assert-equal "first; second" (getf (first raw) :gloss))
+             ;; misc/uk filtered out of senses-raw props (only pos kept)
+             (assert-equal '(("pos" "n")) (getf (first raw) :props))
+             ;; deterministic across calls (no hash-order flake)
+             (assert-equal raw (ram-call 'memdict-senses-raw 200)))
+           ;; uk + posi over the same fixture
+           (assert-equal 1 (length (ram-call 'memdict-uk '(200))))
+           (assert-equal '("n") (ram-call 'memdict-non-arch-posi '(200)))
+           (assert-equal "first; second" (ram-call 'memdict-short-sense-str 200))
+           ;; row counts + verify gate (stub DB counts)
+           (assert-equal 2 (ram-call 'memdict-table-row-count "kana_text"))
+           (assert-true (ram-call 'memdict-verify-counts '("kana_text")
+                                  (lambda (t2) (declare (ignore t2)) 2)))
+           (assert-false (ram-call 'memdict-verify-counts '("kana_text")
+                                   (lambda (t2) (declare (ignore t2)) 99)))
+           ;; ---- conj trio fixture (ids pushed out of order)
+           (let ((c1 (ram-call 'make-compact-conj :id 52 :seq 300 :from 301))
+                 (c2 (ram-call 'make-compact-conj :id 51 :seq 300 :from 301))
+                 (pr (ram-call 'make-compact-conj-prop :id 7 :conj-id 51
+                               :conj-type "te" :pos "vs-i" :neg nil :fml nil))
+                 (cs (ram-call 'make-compact-csr :id 8 :conj-id 51
+                               :text "して" :source-text "する")))
+             (push c1 (gethash 300 (ram-get '*conj-by-seq*)))
+             (push c2 (gethash 300 (ram-get '*conj-by-seq*)))
+             (push pr (gethash 51 (ram-get '*conj-prop-by-id*)))
+             (push cs (gethash 51 (ram-get '*csr-by-id*))))
+           (setf (ram-get '*loaded-tables*)
+                 '("kana_text" "sense" "gloss" "sense_prop"
+                   "conjugation" "conj_prop" "conj_source_reading"))
+           ;; conj-data sorted by id despite push order; trio-gated
+           (let ((cd (ram-call 'memdict-conj-data 300)))
+             (assert-equal 2 (length cd))
+             (assert-equal '(51 52) (mapcar (lambda (row)
+                                              (funcall (find-symbol "COMPACT-CONJ-ID"
+                                                                    :ichiran/memdict-compact)
+                                                       (first row)))
+                                            cd)))
+           (assert-true (ram-call 'memdict-has-conj-p 300))
+           (assert-false (ram-call 'memdict-has-conj-p 301))
+           ;; ---- counter fixture lives on the sense_prop rows above? separate:
+           (let ((cp (ram-call 'make-compact-sense-prop :id 3 :sense-id 55
+                               :tag "pos" :text "ctr" :ord 0 :seq 500)))
+             (push cp (gethash 55 (ram-get '*prop-by-sense*))))
+           (assert-equal '(500) (ram-call 'memdict-counter-ids)))
+      ;; cleanup: never leak fixture state into other tests
+      (ram-call 'memdict-reset)
+      (setf (ram-get '*loaded-tables*) nil))))
+
+(defun ram-call-find-accessor (name)
+  "Helper: function object for a memdict accessor NAME."
+  (symbol-function (find-symbol (string name) :ichiran/memdict-compact)))
+
+;;;; R6: RAM regression coverage (no DB, no table loads).
+;;;; Fixture-based checks for newly added helpers. Anything from parallel
+;;;; work that is not merged yet is guarded with fboundp so this test still
+;;;; passes on its own (asserting nothing for the missing piece).
+
+(define-test ram-regression-test
+  (ram-pkg) ; ensure loaded (bare is fine)
+  (let ((ichiran/dict::*memdict-p* t))
+    (unwind-protect
+         (progn
+           ;; ---- 1. simple-like-p (parallel work; skipped until merged)
+           ;; Shims need the full ichiran/dict generics (present here).
+           (load (asdf:system-relative-pathname
+                  :ichiran "src/memdict-compact-shims.lisp"))
+           (when (fboundp 'ichiran/dict::simple-like-p)
+             (let ((shims-p (and (fboundp 'ichiran/dict::memdict-shims-loaded-p)
+                                 (ichiran/dict::memdict-shims-loaded-p)))
+                   (ck (ram-call 'make-compact-kana
+                                 :id 1 :seq 10 :text "あ" :ord 0)))
+               ;; simple-text is a plain defclass: instantiable without DB.
+               (if shims-p
+                   (progn
+                     (assert-true (ichiran/dict::simple-like-p ck))
+                     (assert-true (ichiran/dict::simple-like-p
+                                   (make-instance 'ichiran/dict::simple-text)))
+                     (assert-false (ichiran/dict::simple-like-p "x")))
+                   ;; Shims cannot be unloaded: without them the compact
+                   ;; fixture is not simple-like yet.
+                   (progn
+                     (assert-false (ichiran/dict::simple-like-p ck))
+                     (assert-false (ichiran/dict::simple-like-p "x"))))))
+           ;; ---- 2. select-conjs :root on an empty RAM index mirrors DB
+           (setf (ram-get '*loaded-tables*) '("conjugation"))
+           ;; RAM branch (table loaded, no rows): no DB hit, NIL like the
+           ;; DB branch's (or (select-dao ... via-NULL) (select-dao ...)).
+           (assert-equal nil (ichiran/dict::select-conjs 999999 :root))
+           ;; ---- 3. memdict-normalize-order is idempotent
+           (let ((k1 (ram-call 'make-compact-kana
+                               :id 3 :seq 400 :text "あいう" :ord 2))
+                 (k2 (ram-call 'make-compact-kana
+                               :id 1 :seq 400 :text "あいう" :ord 0))
+                 (k3 (ram-call 'make-compact-kana
+                               :id 2 :seq 400 :text "あいう" :ord 1)))
+             (dolist (k (list k1 k2 k3))
+               (push k (gethash "あいう" (ram-get '*kana-by-text*)))))
+           (ram-call 'memdict-normalize-order)
+           (assert-equal '(1 2 3)
+                         (mapcar (ram-call-find-accessor 'compact-kana-id)
+                                 (gethash "あいう" (ram-get '*kana-by-text*))))
+           (assert-equal 3 (length (gethash "あいう" (ram-get '*kana-by-text*))))
+           (ram-call 'memdict-normalize-order)
+           (assert-equal '(1 2 3)
+                         (mapcar (ram-call-find-accessor 'compact-kana-id)
+                                 (gethash "あいう" (ram-get '*kana-by-text*))))
+           (assert-equal 3 (length (gethash "あいう" (ram-get '*kana-by-text*))))
+           ;; ---- 4. shims are loaded after section 1 (cannot unload, so
+           ;; the false-before-load transition is not observable here)
+           (when (fboundp 'ichiran/dict::memdict-shims-loaded-p)
+             (assert-true (ichiran/dict::memdict-shims-loaded-p))))
+      ;; cleanup: never leak fixture state into other tests
+      (ram-call 'memdict-reset)
+      (setf (ram-get '*loaded-tables*) nil))))

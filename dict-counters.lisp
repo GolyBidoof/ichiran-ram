@@ -281,16 +281,22 @@
            collect counter-obj))))
 
 (defun get-counter-ids ()
-  (sort
-   (query (:select 'seq :distinct
-                   :from 'sense-prop
-                   :where (:and (:= 'tag "pos") (:= 'text "ctr")))
-          :column)
-   '<))
+  ;; R6: distinct ctr seqs from RAM when sense_prop is loaded.
+  (if (memdict-table-loaded-p "sense_prop")
+      (memdict-call 'memdict-counter-ids)
+      (sort
+       (query (:select 'seq :distinct
+                       :from 'sense-prop
+                       :where (:and (:= 'tag "pos") (:= 'text "ctr")))
+              :column)
+       '<)))
 
 (defun get-counter-stags (seqs)
-  (let ((stagks (make-hash-table))
-        (stagrs (make-hash-table)))
+  ;; R6: stag tables from RAM when sense_prop is loaded (membership use only).
+  (if (memdict-table-loaded-p "sense_prop")
+      (memdict-call 'memdict-counter-stags seqs)
+      (let ((stagks (make-hash-table))
+            (stagrs (make-hash-table)))
     (flet ((q (tag)
              (query (:select 'sp.seq 'sp.text
                              :from (:as 'sense-prop 'sp) (:as 'sense-prop 'sp1)
@@ -305,7 +311,7 @@
          do (push text (gethash seq stagks nil)))
       (loop for (seq text) in (q "stagr")
          do (push text (gethash seq stagrs nil)))
-      (cons stagks stagrs))))
+      (cons stagks stagrs)))))
 
 (defparameter *extra-counter-ids*
   '(1255430 ;; 月

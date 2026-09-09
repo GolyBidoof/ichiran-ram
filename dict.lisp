@@ -42,15 +42,27 @@
     (format stream "~a ~a:~a" (seq obj) (n-kanji obj) (n-kana obj))))
 
 (defmethod get-kana ((obj entry))
-  (text (car (select-dao 'kana-text (:and (:= 'seq (seq obj)) (:= 'ord 0))))))
+  ;; R6: ord-0 kana text from RAM when kana_text is loaded.
+  (if (memdict-table-loaded-p "kana_text")
+      (memdict-call 'memdict-text-by-seq 'kana-text (seq obj))
+      (text (car (select-dao 'kana-text (:and (:= 'seq (seq obj)) (:= 'ord 0)))))))
 
 (defmethod get-text ((obj entry))
-  (text (car (select-dao (if (> (n-kanji obj) 0) 'kanji-text 'kana-text)
-                         (:and (:= 'seq (seq obj)) (:= 'ord 0))))))
+  ;; R6: ord-0 text from RAM (kanji side iff the entry has kanji).
+  (if (> (n-kanji obj) 0)
+      (if (memdict-table-loaded-p "kanji_text")
+          (memdict-call 'memdict-text-by-seq 'kanji-text (seq obj))
+          (text (car (select-dao 'kanji-text (:and (:= 'seq (seq obj)) (:= 'ord 0))))))
+      (if (memdict-table-loaded-p "kana_text")
+          (memdict-call 'memdict-text-by-seq 'kana-text (seq obj))
+          (text (car (select-dao 'kana-text (:and (:= 'seq (seq obj)) (:= 'ord 0))))))))
 
 (defmethod get-kanji ((obj entry))
   (when (> (n-kanji obj) 0)
-    (text (car (select-dao 'kanji-text (:and (:= 'seq (seq obj)) (:= 'ord 0)))))))
+    ;; R6: ord-0 kanji text from RAM when kanji_text is loaded.
+    (if (memdict-table-loaded-p "kanji_text")
+        (memdict-call 'memdict-text-by-seq 'kanji-text (seq obj))
+        (text (car (select-dao 'kanji-text (:and (:= 'seq (seq obj)) (:= 'ord 0))))))))
 
 (defun recalc-entry-stats (&rest entries)
   (query (:update 'entry :set
@@ -116,8 +128,11 @@
 
 (defun get-kanji-kana-old (obj)
   "old get-kana, used when everything else fails"
+  ;; R6: kana rows for the seq from RAM (ord order) when kana_text is loaded.
   (loop with regex = (kanji-regex (text obj))
-     and kts = (select-dao 'kana-text (:= 'seq (seq obj)) 'ord)
+     and kts = (if (memdict-table-loaded-p "kana_text")
+                   (memdict-call 'memdict-rows-by-seq 'kana-text (seq obj))
+                   (select-dao 'kana-text (:= 'seq (seq obj)) 'ord))
      for kt in kts
      for tkt = (text kt)
      if (ppcre:scan regex tkt) do (return tkt)
@@ -344,18 +359,18 @@
    texts is a string or list of strings, if supplied, only the conjs that have src-map with this text will be collected
 "
   (when (or (eql from/conj-ids :root)
-            (if (and *memdict-p* (find-package :ichiran/memdict-compact)
-                     (member "conjugation" (memdict-call 'memdict-loaded-tables) :test 'equal))
+            (if (memdict-table-loaded-p "conjugation")
                 (not (memdict-call 'memdict-has-conj-p seq))
                 (no-conj-data seq)))
     (return-from get-conj-data nil))
   ;; R5: serve from the in-RAM dict when *memdict-p* is on (full load).
-  (when (and *memdict-p* (find-package :ichiran/memdict-compact))
+  ;; Trio-gated: trust the RAM result (even NIL) when all three conj tables
+  ;; are loaded, skipping the DB entirely.
+  (when (memdict-table-loaded-p "conjugation" "conj_prop" "conj_source_reading")
     (let ((ram (memdict-call 'memdict-conj-data seq from/conj-ids)))
-      (when ram
-        (unless (listp texts) (setf texts (list texts)))
-        (return-from get-conj-data
-          (loop for (conj src-map props) in ram
+      (unless (listp texts) (setf texts (list texts)))
+      (return-from get-conj-data
+        (loop for (conj src-map props) in ram
                 for fsrc-map = (if texts
                                    (loop for row in src-map
                                          for txt = (car row) for src-txt = (cadr row)
@@ -369,7 +384,7 @@
                                                        :via (let ((via (seq-via conj)))
                                                               (if (eql via :null) nil via))
                                                        :prop prop
-                                                       :src-map fsrc-map)))))))
+                                                       :src-map fsrc-map))))))
   ;; S2-v2: when the per-sentence conj batch is loaded (cache enabled +
   ;; prefetch-conj-data ran), serve from it — zero DB queries. The batch is
   ;; keyed by conj-id; rebuild the same conj-data structs get-conj-data would.
@@ -460,7 +475,11 @@
     (let ((orig-texts (get-original-text* (or conj-data (word-conj-data reading)) (text reading)))
           (table (case (word-type reading) (:kanji 'kanji-text) (:kana 'kana-text))))
       (loop for (txt seq) in orig-texts
-           nconc (select-dao table (:and (:= 'seq seq) (:= 'text txt)))))))
+            ;; R6: seq+text probe from RAM when that side is loaded.
+            nconc (if (apply 'memdict-table-loaded-p
+                             (if (eql table 'kanji-text) '("kanji_text") '("kana_text")))
+                      (memdict-call 'memdict-find-by-seq-text table seq txt)
+                      (select-dao table (:and (:= 'seq seq) (:= 'text txt))))))))
 
 ;;;;
 
@@ -575,17 +594,55 @@
         ((and present-p (null inits) (not root-only))
          nil)
         ((and present-p (not root-only))
-         ;; A stale hash across sentences can carry invalid initargs (e.g.
-         ;; after add-errata). Fall back to the DB query rather than crash.
-         (or (ignore-errors (loop for init in inits collect (apply 'make-instance init)))
-             (let ((table (if (test-word word :kana) 'kana-text 'kanji-text)))
-               (select-dao table (:= 'text word)))))
+         ;; R6: RAM-seeded entries are (:compact . rows) — compact structs
+         ;; already satisfy the reading interface via the shims; return a
+         ;; fresh spine (find-word-full nconcs results, which must never
+         ;; mutate the sentence hash or the RAM index).
+         (if (and (consp inits) (eql (car inits) :compact))
+             (copy-list (cdr inits))
+             ;; A stale hash across sentences can carry invalid initargs (e.g.
+             ;; after add-errata). Fall back to the DB query rather than crash.
+             (or (ignore-errors (loop for init in inits collect (apply 'make-instance init)))
+                 (let ((table (if (test-word word :kana) 'kana-text 'kanji-text)))
+                   (select-dao table (:= 'text word))))))
         (t (let ((table (if (test-word word :kana) 'kana-text 'kanji-text)))
              (if root-only
                  (query-dao table (:select 'wt.* :from (:as table 'wt) :inner-join 'entry :on (:= 'wt.seq 'entry.seq)
                                            :where (:and (:= 'text word)
                                                         'root-p)))
                  (select-dao table (:= 'text word)))))))))
+
+(defun find-substring-words-ram-seed (substring-hash str sticky kana-loaded kanji-loaded)
+  "Fill SUBSTRING-HASH from the in-RAM dict (no DB IN queries) for the loaded
+   sides only. Values are (:compact . rows) for hits; misses keep the NIL
+   sentinel (present + NIL = checked-not-a-word, so find-word skips the DB
+   probe). Parts on UNLOADED sides are left for the DB IN-query path (their
+   NIL entries mean 'not yet checked'). When a trie is available, only
+   trie-prefix windows are seeded (other parts can't be dict words, so the
+   sentinel stands without any lookup)."
+  (let ((trie (or (when (trie-enabled-p) *ichiran-trie*)
+                  (memdict-call 'memdict-trie))))
+    (labels ((seed (part)
+               (let ((rows nil))
+                 (if (test-word part :kana)
+                     (when kana-loaded
+                       (setf rows (memdict-call 'memdict-find 'kana-text part)))
+                     (when kanji-loaded
+                       (setf rows (memdict-call 'memdict-find 'kanji-text part))))
+                 (when rows
+                   (setf (gethash part substring-hash) (cons :compact rows))))))
+      (if trie
+          (loop for start from 0 below (length str)
+                unless (member start sticky)
+                do (loop for (end . nil) in (trie-call 'trie-prefix-matches
+                                                       trie str start
+                                                       :max-len *max-word-length*)
+                         for part = (subseq str start end)
+                         unless (member end sticky)
+                         do (seed part)))
+          (maphash (lambda (part v) (declare (ignore v)) (seed part))
+                   substring-hash))))
+  substring-hash)
 
 (defun find-substring-words (str &key sticky)
   (let ((substring-hash (make-hash-table :test 'equal))
@@ -598,13 +655,58 @@
              do (let ((part (subseq str start end)))
                   (setf (gethash part substring-hash) nil)
                   (if (test-word part :kana) (push part kana-keys) (push part kanji-keys)))))
-    (loop
-       for table in '(kana-text kanji-text)
-       for keys in (mapcar 'remove-duplicates (list kana-keys kanji-keys))
-       when keys
-       do (loop for kt in (query (:select '* :from table :where (:in 'text (:set keys))) :plists)
-             do (push (cons table kt) (gethash (getf kt :text) substring-hash))))
+    ;; Loaded sides seed from RAM; unloaded sides keep the batched DB IN
+    ;; query (a NIL entry there would wrongly suppress the DB fallback, since
+    ;; NIL-present means "checked, not a word" — and the unloaded side was
+    ;; never checked). Either path preserves the miss-sentinel contract.
+    (let ((kana-loaded (memdict-table-loaded-p "kana_text"))
+          (kanji-loaded (memdict-table-loaded-p "kanji_text")))
+      (when (or kana-loaded kanji-loaded)
+        (find-substring-words-ram-seed substring-hash str sticky
+                                       kana-loaded kanji-loaded))
+      (loop
+         for table in '(kana-text kanji-text)
+         for keys in (mapcar 'remove-duplicates (list kana-keys kanji-keys))
+         for loaded in (list kana-loaded kanji-loaded)
+         unless loaded
+         when keys
+         do (loop for kt in (query (:select '* :from table :where (:in 'text (:set keys))) :plists)
+               do (push (cons table kt) (gethash (getf kt :text) substring-hash)))))
     substring-hash))
+
+(defun memdict-shims-loaded-p ()
+  "T iff the compact-struct analyzer shims are installed, i.e. methods on
+   #'true-text (or equivalent) exist for the compact classes. Guards RAM
+   branches whose rows are compact structs: without the shims, generic
+   calls like (word-conjugations x) on compact rows signal no-applicable-method."
+  (let ((pkg (find-package :ichiran/memdict-compact)))
+    (when pkg
+      (and (fboundp 'true-text)
+           (loop for nm in '("COMPACT-KANA" "COMPACT-KANJI")
+                 for sym = (find-symbol nm pkg)
+                 for cls = (and sym (find-class sym nil))
+                 always (and cls
+                             (ignore-errors
+                              (find-method #'true-text nil (list cls) nil))))))))
+
+(defun simple-like-p (word)
+  "T for simple-text instances and for compact-kana/compact-kanji objects,
+   but only when the analyzer shims are loaded (so generic calls on them
+   work). NIL otherwise."
+  (cond ((typep word 'simple-text) t)
+        (t (let ((pkg (find-package :ichiran/memdict-compact)))
+             (when pkg
+               (loop for nm in '("COMPACT-KANA" "COMPACT-KANJI")
+                     for sym = (find-symbol nm pkg)
+                     for cls = (and sym (find-class sym nil))
+                     when (and cls
+                               (ignore-errors (typep word cls))
+                               (ignore-errors
+                                (or (find-method #'word-type nil (list cls) nil)
+                                    (and (fboundp 'true-text)
+                                         (find-method #'true-text nil (list cls) nil)))))
+                     do (return t)
+                     finally (return nil)))))))
 
 (defun find-words-seqs (words seqs)
   "generalized version of find-word-seq from dict-grammar"
@@ -618,8 +720,27 @@
      else
      collect word into kanji-words
      finally
-       (let ((kw (when kanji-words (select-dao 'kanji-text (:and (:in 'text (:set kanji-words)) (:in 'seq (:set seqs))))))
-             (rw (when kana-words (select-dao 'kana-text (:and (:in 'text (:set kana-words)) (:in 'seq (:set seqs)))))))
+       ;; R6: serve each side from RAM when its table is loaded (compact rows
+       ;; satisfy the text/seq interface via the shims); DB per side otherwise.
+       (let ((kw (when kanji-words
+                   (if (and (memdict-table-loaded-p "kanji_text")
+                            (memdict-shims-loaded-p))
+                       ;; Id-ascending to mirror the DB select-dao row order.
+                       (sort (loop for w in kanji-words
+                                   nconc (loop for s in seqs
+                                               nconc (memdict-call 'memdict-find-by-seq-text
+                                                                   'kanji-text s w)))
+                             '< :key 'id)
+                       (select-dao 'kanji-text (:and (:in 'text (:set kanji-words)) (:in 'seq (:set seqs)))))))
+             (rw (when kana-words
+                   (if (and (memdict-table-loaded-p "kana_text")
+                            (memdict-shims-loaded-p))
+                       (sort (loop for w in kana-words
+                                   nconc (loop for s in seqs
+                                               nconc (memdict-call 'memdict-find-by-seq-text
+                                                                   'kana-text s w)))
+                             '< :key 'id)
+                       (select-dao 'kana-text (:and (:in 'text (:set kana-words)) (:in 'seq (:set seqs))))))))
          (return (nconc kw rw)))))
 
 (defun word-readings (word)
@@ -894,7 +1015,8 @@
          (len (max 1 (the fixnum (mora-length text))))
          (seq (the (or null fixnum) (seq reading)))
          (ord (ord reading))
-         (entry (and seq (or (memdict-call 'memdict-entry-by-seq seq)
+         (entry (and seq (if (memdict-table-loaded-p "entry")
+                             (memdict-call 'memdict-entry-by-seq seq)
                              (cached-or-direct
                               (lambda () (cache-call 'ensure-entry seq))
                               (lambda () (get-dao 'entry seq))))))
@@ -917,23 +1039,16 @@
          (seq-set (and seq (cons seq conj-of))) ;;(if root-p (list seq) (cons seq conj-of)))
          (sp-seq-set (if (and seq root-p (not use-length)) (list seq) seq-set))
          (prefer-kana
-          (if *memdict-p*
-              (or (memdict-call 'memdict-uk sp-seq-set)
-                  (cached-or-direct
-                   (lambda () (cache-call 'ensure-uk sp-seq-set))
-                   (lambda () (select-dao 'sense-prop (:and (:in 'seq (:set sp-seq-set))
-                                                            (:= 'tag "misc") (:= 'text "uk"))))))
+          (if (memdict-table-loaded-p "sense" "sense_prop")
+              (memdict-call 'memdict-uk sp-seq-set)
               (cached-or-direct
                (lambda () (cache-call 'ensure-uk sp-seq-set))
                (lambda () (select-dao 'sense-prop (:and (:in 'seq (:set sp-seq-set))
                                                         (:= 'tag "misc") (:= 'text "uk")))))))
          (is-arch (every 'is-arch sp-seq-set))
          (posi (if ctr-mode (list "ctr")
-                   (if *memdict-p*
-                       (or (memdict-call 'memdict-non-arch-posi seq-set)
-                           (cached-or-direct
-                            (lambda () (cache-call 'ensure-posi seq-set))
-                            (lambda () (get-non-arch-posi seq-set))))
+                   (if (memdict-table-loaded-p "sense" "sense_prop")
+                       (memdict-call 'memdict-non-arch-posi seq-set)
                        (cached-or-direct
                         (lambda () (cache-call 'ensure-posi seq-set))
                         (lambda () (get-non-arch-posi seq-set))))))
@@ -1203,6 +1318,65 @@
         (apply (symbol-function (intern (string fn-name) pkg)) args)
         (error "ichiran/cache not loaded"))))
 
+(defvar *memdict-fn-cache* (make-hash-table :test 'equal)
+  "Cache of resolved memdict function objects by fn-name string.
+   Avoids find-package+find-symbol+assoc per hot-path call.")
+
+(defparameter *memdict-needs-table*
+  '(("memdict-entry-by-seq" "entry")
+    ("memdict-uk" "sense" "sense_prop")
+    ("memdict-non-arch-posi" "sense" "sense_prop")
+    ("memdict-senses-raw" "sense" "gloss" "sense_prop")
+    ("memdict-conj-data" "conjugation" "conj_prop" "conj_source_reading")
+    ("memdict-has-conj-p" "conjugation")
+    ("memdict-find" "kana_text")
+    ;; R6 residual helpers self-gate on *loaded-tables* inside (they serve
+    ;; per-side/partial loads, e.g. kana-only cores), so no gate here.
+    ("memdict-text-by-seq")
+    ("memdict-find-by-seq-text")
+    ("memdict-rows-by-seq")
+    ("memdict-short-sense-str")
+    ("memdict-select-conjs" "conjugation")
+    ("memdict-conj-props" "conj_prop")
+    ("memdict-counter-ids" "sense_prop")
+    ("memdict-counter-stags" "sense_prop")
+    ("memdict-trie"))
+  "Which tables each RAM lookup needs. Multi-table entries gate as a unit:
+   the senses trio and the conjugation trio only serve from RAM when ALL
+   member tables are loaded (partial loads fall back to the DB path, which
+   the per-table benchmark showed is cheaper than a split serve).")
+
+(defun memdict-fn (fn-name)
+  "Resolve FN-NAME (symbol or string) to a function object, cached.
+   Returns NIL when the memdict package isn't loaded or FN is unbound."
+  (let* ((key (string fn-name))
+         (pkg (find-package :ichiran/memdict-compact)))
+    (when pkg
+      (let ((sym (find-symbol key :ichiran/memdict-compact)))
+        (when (and sym (fboundp sym))
+          (let ((fn (symbol-function sym)))
+            (multiple-value-bind (cached found)
+                (gethash key *memdict-fn-cache*)
+              (unless (and found (eq fn cached))
+                (setf (gethash key *memdict-fn-cache*) fn)))
+            (return-from memdict-fn fn))))
+      ;; Unresolvable: drop any stale cache entry.
+      (remhash key *memdict-fn-cache*)
+      nil)))
+
+(defun memdict-loaded-tables-fast ()
+  "Return *loaded-tables* via the cached function object (no recursion
+   through memdict-call, which would redo symbol resolution)."
+  (let ((fn (memdict-fn 'memdict-loaded-tables)))
+    (when fn (funcall fn))))
+
+(defun memdict-table-loaded-p (&rest tables)
+  "T when *memdict-p* is on and every table in TABLES is RAM-loaded.
+   Lets hot paths trust a RAM miss (skip the DB) instead of re-querying."
+  (and *memdict-p*
+       (let ((loaded (memdict-loaded-tables-fast)))
+         (loop for tab in tables always (member tab loaded :test 'equal)))))
+
 (defun memdict-call (fn-name &rest args)
   "Call FN-NAME in the ichiran/memdict-compact package when *memdict-p* is on,
    the package is loaded, AND the table(s) that function needs are loaded.
@@ -1210,19 +1384,15 @@
    R5: routes the analyzer's hot DB lookups (entry, posi, uk, senses, conj)
    to the in-RAM dictionary; partial loads fall back per-table."
   (when (and *memdict-p* (find-package :ichiran/memdict-compact))
-    (let ((fn (find-symbol (string fn-name) :ichiran/memdict-compact)))
-      (when (fboundp fn)
-        (let ((needs (cdr (assoc (string fn-name)
-                                 '(("memdict-entry-by-seq" . "entry")
-                                   ("memdict-uk" . "sense_prop")
-                                   ("memdict-non-arch-posi" . "sense_prop")
-                                   ("memdict-senses-raw" . "sense")
-                                   ("memdict-conj-data" . "conjugation")
-                                   ("memdict-has-conj-p" . "conjugation")
-                                   ("memdict-find" . "kana_text"))
-                                 :test 'equal))))
+    (let ((fn (memdict-fn fn-name)))
+      (when fn
+        ;; equalp: fn-name arrives uppercase ("MEMDICT-…") while the table
+        ;; lists lowercase names — compare case-insensitively.
+        (let ((needs (cdr (assoc (string fn-name) *memdict-needs-table*
+                                 :test 'equalp))))
           (if (or (null needs)
-                  (member needs (memdict-call 'memdict-loaded-tables) :test 'equal))
+                  (loop for tab in needs
+                        always (member tab (memdict-loaded-tables-fast) :test 'equal)))
               (apply fn args)
               nil))))))
 
@@ -1536,8 +1706,8 @@
                  :text (get-text segment)
                  :kana (get-kana word)
                  :seq (seq word)
-                 :conjugations (when (typep word 'simple-text) (word-conjugations word))
-                 :true-text (when (typep word 'simple-text) (true-text word))
+                 :conjugations (when (simple-like-p word) (word-conjugations word))
+                 :true-text (when (simple-like-p word) (true-text word))
                  :components (when (typep word 'compound-text)
                                (loop with primary-seq = (seq (primary word))
                                   for wrd in (words word)
@@ -1667,9 +1837,10 @@
 
 (defun get-senses-raw (seq &aux (tags '("pos" "s_inf" "stagk" "stagr" "field")))
   ;; R5: serve from the in-RAM dict when *memdict-p* is on (full load).
-  (when (and *memdict-p* (find-package :ichiran/memdict-compact))
-    (let ((ram (memdict-call 'memdict-senses-raw seq)))
-      (when ram (return-from get-senses-raw ram))))
+  ;; Senses-trio-gated: trust the RAM result (even NIL) when sense+gloss+
+  ;; sense_prop are all loaded, skipping the DB entirely.
+  (when (memdict-table-loaded-p "sense" "gloss" "sense_prop")
+    (return-from get-senses-raw (memdict-call 'memdict-senses-raw seq)))
   ;; S2-v2b: serve from the memoized/batched sense cache when enabled.
   (when (and (not *in-sense-cache*) (cache-enabled-p) (find-package :ichiran/cache))
     (let ((cached (cache-call 'ensure-senses seq)))
@@ -1777,21 +1948,26 @@
                js)))
 
 (defun short-sense-str (seq &key with-pos)
-  (query
-   (sql-compile
-    `(:limit
-      (:order-by
-       (:select (:select (:raw "string_agg(gloss.text, '; ' ORDER BY gloss.ord)")
-                         :from gloss :where (:= gloss.sense-id sense.id))
-                :from sense
-                ,@(if with-pos
-                      `(:inner-join (:as sense-prop pos) :on (:and (:= pos.sense-id sense.id)
-                                                                   (:= pos.tag "pos")
-                                                                   (:= pos.text ,with-pos))))
-                :where (:= 'sense.seq ,seq)
-                :group-by 'sense.id)
-       'sense.ord)
-      1)) :single))
+  ;; R6: serve from RAM when the senses tables are loaded (sense_prop only
+  ;; needed for the with-pos restriction); else the DB path.
+  (if (apply 'memdict-table-loaded-p
+             (if with-pos '("sense" "gloss" "sense_prop") '("sense" "gloss")))
+      (memdict-call 'memdict-short-sense-str seq :with-pos with-pos)
+      (query
+       (sql-compile
+        `(:limit
+          (:order-by
+           (:select (:select (:raw "string_agg(gloss.text, '; ' ORDER BY gloss.ord)")
+                             :from gloss :where (:= gloss.sense-id sense.id))
+                    :from sense
+                    ,@(if with-pos
+                          `(:inner-join (:as sense-prop pos) :on (:and (:= pos.sense-id sense.id)
+                                                                       (:= pos.tag "pos")
+                                                                       (:= pos.text ,with-pos))))
+                    :where (:= 'sense.seq ,seq)
+                    :group-by 'sense.id)
+           'sense.ord)
+          1)) :single)))
 
 (defun reading-str* (kanji kana)
   (if kanji
@@ -1799,8 +1975,14 @@
       kana))
 
 (defun reading-str-seq (seq)
-  (let* ((kanji-text (car (query (:select 'text :from 'kanji-text :where (:and (:= 'seq seq) (:= 'ord 0))) :column)))
-         (kana-text (car (query (:select 'text :from 'kana-text :where (:and (:= 'seq seq) (:= 'ord 0))) :column))))
+  ;; R6: serve ord-0 texts from RAM per-side (kana-only cores still save the
+  ;; kana probe); fall back per-side to the DB for unloaded tables.
+  (let* ((kanji-text (if (memdict-table-loaded-p "kanji_text")
+                         (memdict-call 'memdict-text-by-seq 'kanji-text seq)
+                         (car (query (:select 'text :from 'kanji-text :where (:and (:= 'seq seq) (:= 'ord 0))) :column))))
+         (kana-text (if (memdict-table-loaded-p "kana_text")
+                        (memdict-call 'memdict-text-by-seq 'kana-text seq)
+                        (car (query (:select 'text :from 'kana-text :where (:and (:= 'seq seq) (:= 'ord 0))) :column)))))
     (reading-str* kanji-text kana-text)))
 
 (defgeneric reading-str (obj)
@@ -1819,12 +2001,16 @@
   (format nil "~a~@[ ~a~%~]~a" seq (reading-str-seq seq) (get-senses-str seq)))
 
 (defun select-conjs (seq &optional conj-ids)
-  (if conj-ids
+  ;; R6: serve from RAM when the conjugation table is loaded.
+  (if (memdict-table-loaded-p "conjugation")
       (unless (eql conj-ids :root)
-        (select-dao 'conjugation (:and (:= 'seq seq) (:in 'id (:set conj-ids)))))
-      (or
-       (select-dao 'conjugation (:and (:= 'seq seq) (:is-null 'via)))
-       (select-dao 'conjugation (:= 'seq seq)))))
+        (memdict-call 'memdict-select-conjs seq conj-ids))
+      (if conj-ids
+          (unless (eql conj-ids :root)
+            (select-dao 'conjugation (:and (:= 'seq seq) (:in 'id (:set conj-ids)))))
+          (or
+           (select-dao 'conjugation (:and (:= 'seq seq) (:is-null 'via)))
+           (select-dao 'conjugation (:= 'seq seq))))))
 
 (defun conj-type-order (conj-type)
   ;; swaps Continuative and Imperative so that the former is shown first
@@ -1856,7 +2042,10 @@
 (defun select-conjs-and-props (seq &optional conj-ids text)
   (sort
    (loop for conj in (select-conjs seq conj-ids)
-         for props = (select-dao 'conj-prop (:= 'conj-id (id conj)))
+         for props = (if (and (memdict-table-loaded-p "conj_prop")
+                              (memdict-shims-loaded-p))
+                         (memdict-call 'memdict-conj-props (id conj))
+                         (select-dao 'conj-prop (:= 'conj-id (id conj))))
          for val = (loop for prop in props minimizing (conj-type-order (conj-type prop)))
          for fprops = (filter-props props text)
          collect (list conj fprops (list (if (eql (seq-via conj) :null) 0 1) val)))

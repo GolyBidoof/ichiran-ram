@@ -56,6 +56,16 @@
   :components ((:file "cli")))
 
 
+(defsystem #:ichiran/ram
+  :description "Ichiran fork: in-RAM dictionary and zero-DB serving cores"
+  :license "MIT"
+  :depends-on (#:ichiran #:postmodern)
+  :serial t
+  :components ((:file "src/trie")
+               (:file "src/memdict-compact")
+               (:file "src/memdict-compact-shims")))
+
+
 #+sb-core-compression
 (defmethod asdf:perform ((o asdf:image-op) (c asdf:system))
   (uiop:dump-image (asdf:output-file o c) :executable t :compression t))

@@ -1,5 +1,5 @@
 #!/bin/bash
-# parity.sh — run the ichiran 748-assertion test suite. Exit 0 = parity green.
+# parity.sh — run the ichiran test suite (see tests.lisp). Exit 0 = parity green.
 # Usage: parity.sh [--core FILE]
 cd "$(dirname "$0")/.." || exit 1
 

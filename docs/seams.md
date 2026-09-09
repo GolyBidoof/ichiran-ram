@@ -9,7 +9,7 @@ change is behind an opt-in flag*.
 
 ## Golden rules (repeat of IMPLEMENTATION-PLAN §0)
 
-1. Parity = `scripts/parity.sh` exit 0 (764 assertions) AND golden-corpus JSON
+1. Parity = `scripts/parity.sh` exit 0 (the suite; see tests.lisp) AND golden-corpus JSON
    byte-identical. Nothing is "done" without both.
 2. Never change a scoring constant, split rule, hint rule, synergy/penalty,
    or errata entry. Ever. If a change *needs* one, stop and file it for a human.

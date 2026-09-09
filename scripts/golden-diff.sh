@@ -4,7 +4,11 @@
 # Usage: golden-diff.sh
 cd "$(dirname "$0")/.." || exit 1
 BASE="data/golden-corpus-baseline.json"
-CUR="/tmp/golden-current.json"
+CUR="$(mktemp /tmp/golden-current.XXXXXXXX)" || {
+  echo "GOLDEN_DIFF_ERROR: mktemp failed"
+  exit 2
+}
+trap 'rm -f "$CUR"' EXIT INT TERM
 
 ./scripts/golden-snapshot.sh --out "$CUR" >/dev/null 2>&1
 
@@ -15,9 +19,9 @@ fi
 
 if cmp -s "$BASE" "$CUR"; then
   echo "GOLDEN_DIFF_OK: current output byte-identical to baseline"
-  rm -f "$CUR"
   exit 0
 else
+  trap - EXIT INT TERM
   echo "GOLDEN_DIFF_DRIFT: output differs from baseline!"
   echo "  baseline: $BASE"
   echo "  current : $CUR (kept for inspection)"

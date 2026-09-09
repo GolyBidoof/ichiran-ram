@@ -8,7 +8,6 @@ docker/pgdata/
 # local perf env
 settings.lisp
 !docker/settings.lisp
-worklogs/
 
 # local perf env artifacts
 local-env/

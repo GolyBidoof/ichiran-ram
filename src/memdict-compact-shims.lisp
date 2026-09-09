@@ -28,14 +28,20 @@
                                                       (compact-kana-text reading)))
         (table 'ichiran/dict::kana-text))
     (loop for (txt seq) in orig-texts
-          nconc (ichiran/dict::select-dao table (:and (:= 'seq seq) (:= 'text txt))))))
+          ;; R6: seq+text probe from RAM when kana_text is loaded.
+          nconc (if (ichiran/dict::memdict-table-loaded-p "kana_text")
+                    (memdict-find-by-seq-text table seq txt)
+                    (ichiran/dict::select-dao table (:and (:= 'seq seq) (:= 'text txt)))))))
 
 (defmethod ichiran/dict::get-original-text ((reading compact-kanji) &key conj-data)
   (let ((orig-texts (ichiran/dict::get-original-text* (or conj-data (ichiran/dict::word-conj-data reading))
                                                       (compact-kanji-text reading)))
         (table 'ichiran/dict::kanji-text))
     (loop for (txt seq) in orig-texts
-          nconc (ichiran/dict::select-dao table (:and (:= 'seq seq) (:= 'text txt))))))
+          ;; R6: seq+text probe from RAM when kanji_text is loaded.
+          nconc (if (ichiran/dict::memdict-table-loaded-p "kanji_text")
+                    (memdict-find-by-seq-text table seq txt)
+                    (ichiran/dict::select-dao table (:and (:= 'seq seq) (:= 'text txt)))))))
 
 ;; ---- simple-text interface shims ----
 
@@ -169,7 +175,7 @@
 
 ;; ---- R5: compact-sense-prop shims (uk path uses sense-id) ----
 (defmethod ichiran/dict::sense-id ((obj compact-sense-prop))
-  (compact-sense-prop-id obj))
+  (compact-sense-prop-sense-id obj))
 (defmethod ichiran/dict::text ((obj compact-sense-prop))
   (compact-sense-prop-text obj))
 (defmethod ichiran/dict::seq ((obj compact-sense-prop))
