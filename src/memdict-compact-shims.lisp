@@ -67,7 +67,11 @@
 (defmethod ichiran/dict::get-text ((obj compact-kanji))
   (compact-kanji-text obj))
 (defmethod ichiran/dict::get-kana ((obj compact-kanji))
-  (compact-kanji-best-kana obj))
+  (let ((bk (compact-kanji-best-kana obj)))
+    (if (eql bk :null)
+        (or (memdict-kanji-kana-fallback (compact-kanji-text obj) (compact-kanji-seq obj))
+            (compact-kanji-text obj))
+        bk)))
 (defmethod ichiran/dict::word-type ((obj compact-kanji))
   :kanji)
 

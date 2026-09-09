@@ -16,13 +16,21 @@
            #:compact-gloss-text #:compact-gloss-ord #:compact-sense-prop-tag
            #:compact-sense-prop-text #:compact-sense-prop-ord
            #:memdict-senses-raw #:memdict-non-arch-posi #:memdict-uk
-           #:memdict-entry-by-seq #:memdict-conj-data #:memdict-has-conj-p))
+           #:memdict-entry-by-seq #:memdict-conj-data #:memdict-has-conj-p
+           #:memdict-reset #:memdict-loaded-tables))
 
 (in-package #:ichiran/memdict-compact)
 
 (defvar *memdict-enabled-p* nil)
 (defun memdict-enabled-p () *memdict-enabled-p*)
 (defun (setf memdict-enabled-p) (v) (setf *memdict-enabled-p* v))
+
+;; Which tables have been loaded (for partial loads: lookups on unloaded
+;; tables must fall back to the DB rather than return "no data").
+(defvar *loaded-tables* nil)
+(defun memdict-loaded-tables ()
+  "Return the list of table names currently loaded in RAM."
+  *loaded-tables*)
 
 ;;; ---- connection spec helper (bare-load friendly) ----
 ;;; When :ichiran/conn is loaded, memdict-load uses its *connection* by
@@ -197,7 +205,19 @@
     (let ((after (sb-kernel:dynamic-usage)))
       (format t "memdict-compact load: ~,1f MB delta~%"
               (/ (- after before) 1048576.0)))
+    (setf *loaded-tables* (union *loaded-tables* tables :test 'equal))
     (memdict-stats)))
+
+(defun memdict-reset ()
+  "Clear ALL loaded dict data (for benchmarking partial loads)."
+  (clrhash *kana-by-text*) (clrhash *kana-by-seq*)
+  (clrhash *kanji-by-text*) (clrhash *kanji-by-seq*)
+  (clrhash *entry-by-seq*) (clrhash *conj-by-seq*) (clrhash *conj-by-from*)
+  (clrhash *conj-prop-by-id*) (clrhash *csr-by-id*)
+  (clrhash *sense-by-seq*) (clrhash *gloss-by-sense*) (clrhash *prop-by-sense*)
+  (clrhash *string-pool*)
+  (setf *loaded-tables* nil)
+  t)
 
 (defun memdict-stats ()
   (list :kana-text (hash-table-count *kana-by-text*)
@@ -323,6 +343,16 @@
                                 when (and (equal (compact-sense-prop-tag p) "misc")
                                           (equal (compact-sense-prop-text p) "uk"))
                                 collect p))))
+
+(defun memdict-kanji-kana-fallback (kanji-text seq)
+  "RAM fallback for a kanji row with NULL best_kana (mirrors
+   ichiran/dict::get-kanji-kana-old's last-resort): return the first kana
+   reading for SEQ from the RAM kana-by-seq index. NIL if kana_text is not
+   loaded for SEQ (caller falls back to the DB path)."
+  (declare (ignorable kanji-text))
+  (let ((rows (gethash seq *kana-by-seq*)))
+    (when rows
+      (compact-kana-text (car rows)))))
 
 (defun memdict-has-conj-p (seq)
   "T whether SEQ has any conjugation rows."

@@ -344,7 +344,8 @@
    texts is a string or list of strings, if supplied, only the conjs that have src-map with this text will be collected
 "
   (when (or (eql from/conj-ids :root)
-            (if (and *memdict-p* (find-package :ichiran/memdict-compact))
+            (if (and *memdict-p* (find-package :ichiran/memdict-compact)
+                     (member "conjugation" (memdict-call 'memdict-loaded-tables) :test 'equal))
                 (not (memdict-call 'memdict-has-conj-p seq))
                 (no-conj-data seq)))
     (return-from get-conj-data nil))
@@ -1203,14 +1204,27 @@
         (error "ichiran/cache not loaded"))))
 
 (defun memdict-call (fn-name &rest args)
-  "Call FN-NAME in the ichiran/memdict-compact package when *memdict-p* is on
-   and the package is loaded; otherwise return NIL (caller falls back to DB).
+  "Call FN-NAME in the ichiran/memdict-compact package when *memdict-p* is on,
+   the package is loaded, AND the table(s) that function needs are loaded.
+   Otherwise return NIL (caller falls back to the DB path).
    R5: routes the analyzer's hot DB lookups (entry, posi, uk, senses, conj)
-   to the in-RAM dictionary."
+   to the in-RAM dictionary; partial loads fall back per-table."
   (when (and *memdict-p* (find-package :ichiran/memdict-compact))
     (let ((fn (find-symbol (string fn-name) :ichiran/memdict-compact)))
       (when (fboundp fn)
-        (apply fn args)))))
+        (let ((needs (cdr (assoc (string fn-name)
+                                 '(("memdict-entry-by-seq" . "entry")
+                                   ("memdict-uk" . "sense_prop")
+                                   ("memdict-non-arch-posi" . "sense_prop")
+                                   ("memdict-senses-raw" . "sense")
+                                   ("memdict-conj-data" . "conjugation")
+                                   ("memdict-has-conj-p" . "conjugation")
+                                   ("memdict-find" . "kana_text"))
+                                 :test 'equal))))
+          (if (or (null needs)
+                  (member needs (memdict-call 'memdict-loaded-tables) :test 'equal))
+              (apply fn args)
+              nil))))))
 
 ;;; Perf: S4 trie — when enabled (and ichiran/trie is loaded), the inner
 ;;; window loop in join-substring-words* only probes (start,end) pairs that

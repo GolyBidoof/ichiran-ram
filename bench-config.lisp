@@ -1,0 +1,45 @@
+(defpackage :bench-config (:use :cl) (:export :main))
+(in-package :bench-config)
+
+(defparameter *samples*
+  '(("こんにちは" . "hiragana")
+    ("ありがとうございます" . "hiragana")
+    ("コンピューター" . "katakana")
+    ("日本語を勉強しています" . "kana+kanji")
+    ("一覧は最高だぞ" . "kana+kanji")
+    ("錬丹術は医学方面に特化してるというからね" . "kanji-heavy")
+    ("学校で数学と歴史を勉強しています" . "kanji-heavy")
+    ("昨日、学校で日本語の試験がありました。友達と一緒に図書館で勉強しました。難しい漢字がたくさんありましたが、何とか頑張りました。" . "paragraph")))
+
+(defun count-lines (file)
+  (when (probe-file file)
+    (with-open-file (s file) (loop for l = (read-line s nil nil) while l count l))))
+
+(defun bench-one (text)
+  (let* ((qlog (format nil "/tmp/bc-~d.log" (random 1000000000)))
+         (start (get-internal-real-time))
+         (res (ichiran/conn:with-log (qlog)
+                (multiple-value-list (ichiran:romanize text :with-info t))))
+         (end (get-internal-real-time))
+         (queries (count-lines qlog)))
+    (declare (ignore res))
+    (ignore-errors (delete-file qlog))
+    (values queries (/ (- end start) internal-time-units-per-second))))
+
+(defun main ()
+  (ql:quickload :ichiran :silent t)
+  (load "src/memdict-compact.lisp")
+  (load "src/memdict-compact-shims.lisp")
+  (let* ((config (uiop:getenv "BENCH_CONFIG"))
+         (conn '("jmdict" "jmdict" "password" "localhost")))
+    (cond
+      ((equal config "DB")
+       (setf ichiran/dict::*memdict-p* nil))
+      (t
+       (setf ichiran/dict::*memdict-p* t)
+       (ichiran/memdict-compact:memdict-load :conn conn :chunk 100000
+                                             :tables (read-from-string config))))
+    (format t "CONFIG=~a~%" config)
+    (dolist (pair *samples*)
+      (multiple-value-bind (q t2) (bench-one (car pair))
+        (format t "~a|~a|q=~a|t=~,3f~%" (car pair) (cdr pair) q t2)))))
