@@ -1,7 +1,7 @@
 # Why This Fork Exists (docs/WHY-FORK.md)
 
 Upstream [ichiran](https://github.com/tshatrov/ichiran) answers every
-dictionary lookup from PostgreSQL at analyze time — thousands of queries per
+dictionary lookup from PostgreSQL at analyze time - thousands of queries per
 sentence, which dominates latency over any non-local DB link. This fork adds
 an **in-RAM serving path**: hot dictionary tables load once into compact
 indexed structs, and the analyzer's hot lookups are routed to RAM behind

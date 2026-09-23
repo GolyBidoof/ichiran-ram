@@ -57,7 +57,7 @@ and each filter returns fresh lists. Two levels of fix:
 
 - *Cheap:* short-circuit when the split list becomes empty (correct today, just
   wasteful), and have filters return the input pair unchanged rather than a
-  fresh one-element list — the common "no objection" case. Bounded, no
+  fresh one-element list - the common "no objection" case. Bounded, no
   behaviour change, but the win is the allocation only.
 - *Structural:* stop representing splits as lists of conses at all. An index
   pair array with a reusable per-sentence buffer would remove most of the 2,116
@@ -88,7 +88,7 @@ well-understood, and cheap to verify. Worth doing.
 The scanner is large to *store* but cheap to *build*, so a cache adds overhead
 to avoid work that was never expensive. The one untried variant is precompiled
 scanners at the call sites (`load-time-value`), which avoids the cache lookup
-entirely — but given the two failures, set expectations low.
+entirely - but given the two failures, set expectations low.
 
 **5. `calc-score` (386 calls/line).** Lower priority than the plan claimed.
 Its allocation is 2.0%. Bitmask POS classes and a transition matrix would be a

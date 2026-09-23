@@ -1,4 +1,4 @@
-# Performance Benchmark — Old vs New (by alphabet composition)
+# Performance Benchmark - Old vs New (by alphabet composition)
 
 Date: 2026-09. Three configurations measured head-to-head on the same corpus
 with varying hiragana/katakana/kanji composition. Times are median-of-3 wall
@@ -17,7 +17,7 @@ clock for `(romanize text :with-info t)`; DB is local PostgreSQL (warm).
 | 7 | 錬丹術は医学方面に特化してるというからね | kanji-heavy long |
 | 8 | 昨日、学校で日本語の試験がありました。友達と一緒に図書館で勉強しました。 | paragraph (mixed) |
 
-## Results — per-sentence wall time (seconds, median of 3)
+## Results - per-sentence wall time (seconds, median of 3)
 
 | Sentence | OLD (pristine, flags OFF) | NEW (cache ON, DB) | CORE (analyzer-on-core, memdict ON) | CORE/OLD | CORE/NEW |
 |---|---|---|---|---|---|
@@ -45,7 +45,7 @@ clock for `(romanize text :with-info t)`; DB is local PostgreSQL (warm).
    kana dict in RAM, analyzer loaded on top) is **16–39% faster than the
    pristine baseline on every sentence**, and **~32% faster than the
    cache-ON DB path** overall. The raw dict lookup is 3,000–15,000× faster
-   than a DB query — that's the kana-heavy path that dominated before.
+   than a DB query - that's the kana-heavy path that dominated before.
 
 2. **The S1/S2 DB cache is NOT a wall-clock win on single short sentences.**
    cache-ON measured 1.07–1.36× SLOWER than pristine flags-OFF per sentence
@@ -55,7 +55,7 @@ clock for `(romanize text :with-info t)`; DB is local PostgreSQL (warm).
    fix (which is in both HEAD configs). The handover's "3–38×" figures were
    cold-connection single-shot measurements, not warm-daemon throughput.
 
-3. **Query counts (pristine vs HEAD, both flags OFF): identical** — behavior
+3. **Query counts (pristine vs HEAD, both flags OFF): identical** - behavior
    parity holds; HEAD is ~20-25% faster on wall time from the earlier S6
    compile-polish/char-scan work.
 

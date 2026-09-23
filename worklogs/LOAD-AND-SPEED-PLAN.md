@@ -17,7 +17,7 @@ a representative workload. Everything below was measured on this machine.
 | RAM | **0** |
 
 The query number is the headline: on curated corpus text the DB path issues
-~17 queries per line, but on dialogue it issues **1727** — 100x more. VN text
+~17 queries per line, but on dialogue it issues **1727** - 100x more. VN text
 is full of names (遠坂, ロンドン), casual contractions (なって, っていうか,
 じゃあ) and long conjugated forms (追われて, 繋いで, 炎上して, しちゃってたら,
 承知しない), and every unknown or derived candidate triggers more lookups.
@@ -57,7 +57,7 @@ rebuild. Ranked options:
 2. **Drop the derived hash indexes entirely** (medium risk, moderate effort).
    `text-index` (3.1M + 5.3M entries) exists to map text -> pool index. A
    sorted `(text-id)` permutation plus binary search answers the same query
-   with one 12MB array instead of two multi-GB hash tables — and it would
+   with one 12MB array instead of two multi-GB hash tables - and it would
    remove both the rebuild cost at load and a large share of resident memory.
    This is the highest-value structural change left, because it attacks load
    time *and* the 8.1GB footprint.
@@ -67,7 +67,7 @@ rebuild. Ranked options:
    table gating, which already exists in the form of `*complete-tables*`.
 4. **True mmap** (high effort, high risk). The typed columns are already raw
    byte arrays and could be mapped in place. The blockers are the string pools
-   (Lisp strings cannot be mapped — they would need to become
+   (Lisp strings cannot be mapped - they would need to become
    `(buffer . offset)` references) and the hash indexes (see option 2). Worth
    doing only after 2, since 2 removes much of the reason for the indexes.
 
@@ -88,7 +88,7 @@ rebuild. Ranked options:
 | 14 | 0.343s | 5.66x | 2.45ms |
 | 20 | 0.299s | 6.49x | 2.14ms |
 
-So yes, more workers help — **up to the performance-core count, then they
+So yes, more workers help - **up to the performance-core count, then they
 hurt**. Past 10 the extra work lands on the four efficiency cores and the
 batch cannot finish until its slowest member does, so throughput falls. The
 old default (`cpu-count - 1` = 13) was 15% slower than the optimum; the
@@ -148,7 +148,7 @@ Ranked:
    memoizing it measured as no help. Dialogue with kanji and proper nouns may
    well call `kanji-mask`/`kanji-regex` per word, and cl-ppcre in this tree has
    **no scanner cache at all**, so each call compiles. Worth instrumenting on
-   `the visual-novel dialogue sample` before writing any code — the earlier lesson was that
+   `the visual-novel dialogue sample` before writing any code - the earlier lesson was that
    the sampling profile over-reports this and the A/B is authoritative.
 4. **More workers.** 13 cores are available and the measurement used 8.
 
@@ -157,7 +157,7 @@ Ranked:
 Parallel efficiency tops out at ~78% (10 workers, 7.82x). The obvious suspect
 was SBCL's stop-the-world GC serializing the workers. It is not: measured
 over the 140-line the visual novel workload, GC is **1.6-3.0% of wall** in parallel and
-0.2% serial, while **860MB is consed per run — 6.1MB of garbage per line**.
+0.2% serial, while **860MB is consed per run - 6.1MB of garbage per line**.
 Allocation at that rate is a memory-bandwidth cost, and an 8GB structure with
 data-dependent access is latency bound, so the ceiling is the memory
 subsystem rather than collection pauses. The lever is therefore *cons less*,
@@ -189,7 +189,7 @@ one process, 140 the visual novel lines, best of 3:
 So a real but modest win, borderline noise on the serial path. Kept because
 it removes allocation on the path that the bandwidth analysis above says is
 the limiter, and because a predicate is the honest construct for a boolean
-test — but it is not a headline number.
+test - but it is not a headline number.
 
 ## A warm process, so measurement is cheap (scripts/warm.sh)
 
@@ -228,7 +228,7 @@ holding the builder's lock for 2s in a background thread: `get-suffix-map`
 returned instantly, then waited 2.68s once a blocking wait was added.
 
 The uncomfortable part: with the wait in place the output became
-deterministic **and different from the recorded baseline on that line** — all
+deterministic **and different from the recorded baseline on that line** - all
 three runs drifted identically. The baseline in `data/` was itself captured
 while the race was live, so it encodes one of the two outcomes.
 

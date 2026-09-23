@@ -1,4 +1,4 @@
-# R6 Session Report — review follow-ups implemented + benchmark vs upstream
+# R6 Session Report - review follow-ups implemented + benchmark vs upstream
 
 Date: 2026-09. Goal: implement the 6 review items from HANDOVER-NEXT §8,
 then benchmark against upstream (DB-only) behavior.
@@ -45,42 +45,42 @@ output hashes compared:
 - Decisive controls: lite is 100% self-stable across processes (19/19
   twice); DB disagrees with ITSELF (para 8 has 3 distinct DB outputs across
   runs; golden X/Y bimodality; one intra-process flake). RAM sits inside the
-  analyzer's natural output variation — see §6.
+  analyzer's natural output variation - see §6.
 - Found and fixed via this test: shared-index aliasing (below).
 
 ## 1. What was implemented
 
-1. **Hygiene** — worklogs/ tracked in git (was gitignored); golden-diff uses
+1. **Hygiene** - worklogs/ tracked in git (was gitignored); golden-diff uses
    mktemp + keeps the drift file (trap released on drift); build-image has
    PRESET=lite|kana|full, TRIE_TABLES knob, provenance files, pipefail.
-2. **memdict fast path + layering** (`dict.lisp`) — cached fn resolution
+2. **memdict fast path + layering** (`dict.lisp`) - cached fn resolution
    (memdict-fn), no recursive memdict-call for loaded-tables, trio-aware
    needs as lists, memdict-table-loaded-p, trust-RAM-skips-DB at entry/uk/
    posi/senses/conj-data sites. Fixed an fboundp-on-function-object crash
    that only fired on cache HITS.
-3. **te-iru ordering** (`src/memdict-compact.lisp`) — ORDER BY unique key on
+3. **te-iru ordering** (`src/memdict-compact.lisp`) - ORDER BY unique key on
    every load, one-time memdict-normalize-order (ascending id = select-dao
    order), conj-data sorted by conj/csr id, senses-raw deterministic
    (ord-ordered texts, sorted tags, stable-sort).
-4. **Residual wiring** — reading-str-seq, entry get-kana/get-text/get-kanji,
+4. **Residual wiring** - reading-str-seq, entry get-kana/get-text/get-kanji,
    get-kanji-kana-old, select-conjs (+conj-props), short-sense-str,
    get-original-text (simple-text + both compact shim methods),
    find-words-seqs (id-sorted per side), get-counter-ids, get-counter-stags.
    Deliberately NOT wired: suffix-map (already in-memory via *suffix-cache*),
-   restricted-readings (0 queries in corpus — rare path),
+   restricted-readings (0 queries in corpus - rare path),
    get-counter-readings (2 batched queries once per process, DAO-shaped).
-5. **RAM substring path + trie-in-core** — find-substring-words seeds loaded
+5. **RAM substring path + trie-in-core** - find-substring-words seeds loaded
    sides from RAM ((:compact . rows), miss sentinels preserved) and keeps the
    batched DB IN query for UNLOADED sides (hybrid: partial loads stay
    correct); baked trie via memdict-build-trie + TRIE_TABLES.
-6. **Lite core** — PRESET=lite builds here (168MB), verified §0.
+6. **Lite core** - PRESET=lite builds here (168MB), verified §0.
 
 ## 2. THE BIG FIND: silent row loss in the R5 loader (fixed)
 
 `memdict-load` paged with LIMIT/OFFSET and NO ORDER BY. Postgres reshuffles
 unordered pages (parallel/sync scans): entry loaded **1,551,111 of 2,512,557
 rows with no error**. Every full-dict load from this code had randomly
-missing rows — a likely contributor to the te-iru gap alongside ordering.
+missing rows - a likely contributor to the te-iru gap alongside ordering.
 Fix: ORDER BY unique key per table (seq for entry). Every load now ends with
 MEMDICT-VERIFY-OK/FAIL per-table row counts vs SELECT count(*). All 7
 partial-load tables verify exact; kana-only lite core loads clean.
@@ -89,7 +89,7 @@ partial-load tables verify exact; kana-only lite core loads clean.
 
 - fboundp called on a cached FUNCTION object (cache-hit-only crash).
 - **Dead gating table**: `*memdict-needs-table*` keys are lowercase but
-  lookups arrive uppercase — `assoc` with `equal` never matched, so the table
+  lookups arrive uppercase - `assoc` with `equal` never matched, so the table
   gated nothing (call-site guards carried production). Fixed with `equalp`;
   the new `ram-helpers-test` covers trio gating explicitly.
 - **Shared-index aliasing (the page-test catch)**: RAM lookups returned live
@@ -99,9 +99,9 @@ partial-load tables verify exact; kana-only lite core loads clean.
   (`42883 integer = record`, deterministic on the 6th paragraph). Fixed with
   copy-on-return for all kana/kanji rows + fresh spines.
 - Hybrid-seeding first version suppressed DB fallback for unloaded sides
-  (kanji words vanished under kana-only loads) — per-side hybrid fixed it.
+  (kanji words vanished under kana-only loads) - per-side hybrid fixed it.
 - memdict-verify-counts ran outside with-db-connection (bare builds have no
-  ambient connection) — own connection scope now.
+  ambient connection) - own connection scope now.
 - Extra/missing parens in three edits (caught by load tests, not by review).
 
 ## 4. Residual-query enumeration (DB-only, romanize :with-info t)
@@ -131,5 +131,5 @@ analyzed). The flips are knife-edge segmentation ties broken by candidate
 order, which varies with scan dynamics. Recommendation: treat one drift as
 "re-run"; harden later with ORDER BY in candidate queries or deterministic
 tiebreaks (upstream-worthy). Parity (782+29) is deterministic and green
-throughout — keep it as the hard gate. RAM-vs-DB diffs found on 5/19 page
+throughout - keep it as the hard gate. RAM-vs-DB diffs found on 5/19 page
 paragraphs are the same tiebreak family, inside DB's own variation.

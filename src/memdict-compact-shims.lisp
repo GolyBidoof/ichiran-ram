@@ -1,4 +1,4 @@
-;;;; src/memdict-compact-shims.lisp — analyzer shims for the compact dict.
+;;;; src/memdict-compact-shims.lisp - analyzer shims for the compact dict.
 ;;;;
 ;;;; This file is ONLY loaded in the full-ichiran context (after quickload
 ;;;; :ichiran), where the ichiran/dict generics exist. It defines defmethods

@@ -1,4 +1,4 @@
-;;;; src/cache.lisp — S1: seq-keyed memoized DB lookups (thread-safe).
+;;;; src/cache.lisp - S1: seq-keyed memoized DB lookups (thread-safe).
 ;;;;
 ;;;; Why: calc-score and get-conj-data fire 3+ queries per candidate word
 ;;;; (entry, sense-prop "uk", get-non-arch-posi, conjugation +

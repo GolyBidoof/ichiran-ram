@@ -1,4 +1,4 @@
-;;;; src/int-snapshot.lisp — Tier 3.1: on-disk columnar snapshot of the
+;;;; src/int-snapshot.lisp - Tier 3.1: on-disk columnar snapshot of the
 ;;;; integer dictionary layer.
 ;;;;
 ;;;; Why: loading the integer layer from PostgreSQL costs ~82s on the full
@@ -11,7 +11,7 @@
 ;;;; What is stored: every typed column as raw element bytes, every string
 ;;;; pool as length-prefixed UTF-8. What is NOT stored: the hash indexes
 ;;;; (text-index, by-seq, by-from, by-conj). They are pure derivations of the
-;;;; columns, so they are rebuilt on load — cheaper and smaller than
+;;;; columns, so they are rebuilt on load - cheaper and smaller than
 ;;;; serialising hash tables, and it keeps the file canonical.
 ;;;;
 ;;;; This is deliberately a flat-file snapshot rather than an mmap'able
@@ -280,7 +280,7 @@
          (sink-u8 s 1) (write-typed-vector s value))
         ((and (vectorp value) (not (stringp value)))
          ;; Element type T: either a string pool or a plain integer vector
-         ;; (entry's per-slot arrays). Decide by inspecting an element —
+         ;; (entry's per-slot arrays). Decide by inspecting an element - 
          ;; guessing from the container type alone is wrong both ways.
          (let ((first (if (plusp (length value)) (aref value 0) nil)))
            (cond ((or (null first) (stringp first) (char-vector-p first))

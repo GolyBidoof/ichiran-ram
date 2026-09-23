@@ -1,4 +1,4 @@
-# Ichiran Performance Implementation Plan — Agent-Fleet Ready
+# Ichiran Performance Implementation Plan - Agent-Fleet Ready
 
 *How to implement the improvements from `PERFORMANCE-ANALYSIS.md`, and how a
 fleet of agents can carry the work (e.g., overnight batches). Reads after the
@@ -6,7 +6,7 @@ analysis doc; assumes its phases 0–5 and impact estimates (§9).*
 
 ---
 
-## 0. Guardrails (definition of done — non-negotiable)
+## 0. Guardrails (definition of done - non-negotiable)
 
 1. **Behavior parity is the contract.** The 748-assertion suite
    (`(ichiran/test:run-all-tests)`, `tests.lisp`) must pass before/after every
@@ -38,19 +38,19 @@ assumes one of:
 - Or a manual SBCL + PostgreSQL install with the DB restored and
   `(init-all-caches)` / `(init-suffixes t)` run.
 
-**Coordinator (serial, small, one agent — call it C0) prepares:**
-1. `git init` + initial commit in this repo — **needed for fleet rollback**;
+**Coordinator (serial, small, one agent - call it C0) prepares:**
+1. `git init` + initial commit in this repo - **needed for fleet rollback**;
    there is no git metadata today. Without git, parallel agents cannot be
    isolated or reverted.
-2. `scripts/env-check.sh` — asserts `docker`/`sbcl` reachable, DB reachable,
+2. `scripts/env-check.sh` - asserts `docker`/`sbcl` reachable, DB reachable,
    core image builds, `(ichiran/test:run-all-tests)` green on a clean tree.
-3. `scripts/parity.sh` — runs the 748 tests + golden-corpus diff; exit 0 = ok.
-4. `data/golden-corpus.txt` + `data/golden-corpus-baseline.json` — generated on
+3. `scripts/parity.sh` - runs the 748 tests + golden-corpus diff; exit 0 = ok.
+4. `data/golden-corpus.txt` + `data/golden-corpus-baseline.json` - generated on
    the clean tree (this is the "measure first" artifact of phase 0).
-5. `docs/seams.md` — the interface spec from §2 below, so every agent builds to
+5. `docs/seams.md` - the interface spec from §2 below, so every agent builds to
    the same contract.
 6. Baseline numbers into `worklogs/baseline.md` via the query counter
-   (see A2) — counts of queries per sentence at several lengths, `(time ...)`,
+   (see A2) - counts of queries per sentence at several lengths, `(time ...)`,
    CPU%.
 
 C0 is ~2–4 agent-hours and **must finish before any writer starts**.
@@ -68,10 +68,10 @@ in + a behavior contract, defined once in `docs/seams.md` by C0.
 | Seam | Interface (agents implement) | Plugs into (integration) | Provider agent |
 |---|---|---|---|
 | **S1 seq-keyed lookup** | `(cache:get-entry seq)`, `(cache:get-conj seq from-or-ids)`, `(cache:get-posi seqs)` returning plain data, `NIL`/`:null`-safe, thread-safe, invalidatable | `calc-score`'s `get-dao`/`select-dao` calls (`dict.lisp:803,822-827`), `get-conj-data` (`342-369`) | A1 (conn.lisp) |
-| **S2 sentence prefetch ctx** | `(prefetch:with-prefetch str thunk)` — 2–3 `IN (...)` queries per sentence; fills hashes readable via S1-style accessors | Bound as specials around scoring like the existing `*suffix-map-temp*` convention (`dict.lisp:1048-1050`) | A1/A6 |
-| **S3 in-memory dictionary** | `(memdict:load)`, `(memdict:find-text table str)` etc. — loads hot tables once, ~few hundred MB, demotes Postgres in the hot path | `find-word`/`find-substring-words` (`dict.lisp:489-518`) | A6 |
-| **S4 trie candidates** | `(trie:build dict)`, `(trie:find-prefixes str start)` — dictionary-prefix walk replacing O(N²) probes | `join-substring-words*` (`dict.lisp:1071-1112`) | A5 |
-| **S5 corpus driver + daemon** | `(driver:process-corpus file fn &key threads)` (lparallel, ordered output); `(daemon:serve)` — one persistent stdin/stdout JSON loop | `cli.lisp`, new `ichiran/cli` mode | A4 |
+| **S2 sentence prefetch ctx** | `(prefetch:with-prefetch str thunk)` - 2–3 `IN (...)` queries per sentence; fills hashes readable via S1-style accessors | Bound as specials around scoring like the existing `*suffix-map-temp*` convention (`dict.lisp:1048-1050`) | A1/A6 |
+| **S3 in-memory dictionary** | `(memdict:load)`, `(memdict:find-text table str)` etc. - loads hot tables once, ~few hundred MB, demotes Postgres in the hot path | `find-word`/`find-substring-words` (`dict.lisp:489-518`) | A6 |
+| **S4 trie candidates** | `(trie:build dict)`, `(trie:find-prefixes str start)` - dictionary-prefix walk replacing O(N²) probes | `join-substring-words*` (`dict.lisp:1071-1112`) | A5 |
+| **S5 corpus driver + daemon** | `(driver:process-corpus file fn &key threads)` (lparallel, ordered output); `(daemon:serve)` - one persistent stdin/stdout JSON loop | `cli.lisp`, new `ichiran/cli` mode | A4 |
 | **S6 char-scan helpers** | table-based `(chars:scan-class str start)` replacing hot regexes | `characters.lisp` hot functions | A3 |
 
 Contract notes: modules are **pure at their boundary** (return data, never
@@ -87,12 +87,12 @@ makes `calc-score`/`join-substring-words*` consult S1→S4 under a flag
 Each task below is a ready-to-hand **agent brief**. Writers work on files they
 exclusively own (§4); readers may fan out wider.
 
-### M0 — Foundations (serial, C0)
+### M0 - Foundations (serial, C0)
 Tasks: env-check script, git init+commit, golden corpus snapshot, parity.sh,
 seams.md, baseline.md. **Gate:** parity.sh green on clean tree; baseline
 numbers recorded. *(Effort ≈ 2–4 agent-hours; must be done first.)*
 
-### Fan-out A — Parallel module builds (file-disjoint; 4–6 writers + readers)
+### Fan-out A - Parallel module builds (file-disjoint; 4–6 writers + readers)
 
 | Agent | Owns (exclusive) | Brief | Self-verify |
 |---|---|---|---|
@@ -103,7 +103,7 @@ numbers recorded. *(Effort ≈ 2–4 agent-hours; must be done first.)*
 | **A5** | new `trie.lisp` | S4: trie over kanji+kana surface texts + suffix stems; interface per seams.md; unit tests with sample dict | trie unit tests |
 | **A6** | new `memdict.lisp`, new `dump-dict.lisp` | S3: loader that slurps hot tables into hashes (or reads a pre-generated dump), accessors; note dynamic-space needs | load on docker env; size + hit-rate report |
 
-**Readers (parallel, read-only — safe to run 8–10 at once):** inventory every
+**Readers (parallel, read-only - safe to run 8–10 at once):** inventory every
 query site under `calc-score`'s reach with estimated frequency (A2 feeds these
 by grep/walk); categorize `dict-split.lisp`'s ~200 splits + `dict-grammar.lisp`
 hints/synergies into "cheap regex/string" vs "DB-touching" buckets (feeds later
@@ -114,11 +114,11 @@ touches.
 `calc-score` behind `*prefetch-p*`; run parity + gate (§6 G1). **Gate:**
 `*prefetch-p*` on ⇒ ≥3× fewer queries/sentence, parity green.
 
-### Fan-out B — Round 2 (after I1 lands)
+### Fan-out B - Round 2 (after I1 lands)
 - **B1 (A5-Agent):** S4 swap into `join-substring-words*` behind a flag.
 - **B2 (A6-Agent):** S3 swap: `find-word`/suffix path via memdict behind
   `*memdict-p*`; measure long run-ons.
-- **B3 (new agent):** `driver.lisp` S5-pool — lparallel kernel, per-thread
+- **B3 (new agent):** `driver.lisp` S5-pool - lparallel kernel, per-thread
   connection when S3 off, ordered results, progress; unit-tested pattern from
   `tests.lisp:670-677`.
 - **B4 (A3-Agent):** allocation/compile-policy pass: fix
@@ -166,7 +166,7 @@ B3: `driver.lisp`; all others: read-only.
 **Brief template (every writer receives this):**
 ```
 OBJECTIVE: <one sentence>
-FILES (exclusive): <list>  — do not modify anything else
+FILES (exclusive): <list> - do not modify anything else
 SEAM(S): <S1...> per docs/seams.md
 INVARIANTS: behavior parity; no scoring/split/hint/errata constants; no DB
             schema changes; thread-safe caches
@@ -186,7 +186,7 @@ because the repo is committed at each step and `worklogs/` records state.
 file plus a handful of seams; more concurrent writers than file owners is pure
 contention. Readers can be ~10 because read-only analysis never conflicts.
 Attempting "20 agents all editing calc-score" would produce merge hell, not
-speed — the honest ceiling of this codebase.
+speed - the honest ceiling of this codebase.
 
 **Overnight runner (where a workflow tool fits):** a workflow with phases
 (Baseline-check → fan-out A/B writers → per-agent verify → coordinator merge →
@@ -229,7 +229,7 @@ core image re-dumped, full parity on all flag combos, docs updated. **Morning:**
 | G4 | I2-B4 (compile/alloc) | bytes-consed/parse ≤ 30 % of baseline | `(time ...)` |
 | G5 | Final | all of G1–G4 + full parity + golden-corpus byte-identical | full suite |
 
-Real targets to write into the gate script come from baseline.md (G0) — never
+Real targets to write into the gate script come from baseline.md (G0) - never
 assume the analysis-doc estimates; measure first.
 
 ---
@@ -240,7 +240,7 @@ assume the analysis-doc estimates; measure first.
 |---|---|
 | Agents drift scoring/errata constants "to make tests pass" | Guardrail 2 + code-review-style diff scan by coordinator at each merge; golden corpus catches drift |
 | Cache invalidation bugs (errata/add-errata mutate DB; stale memdict) | S1/S3 expose `invalidate`/`reload`; `add-errata` path calls it; document in seams.md |
-| No runnable env in this workspace | §8 — fleet must run where docker compose up works; otherwise agents may only do static/read-only work |
+| No runnable env in this workspace | §8 - fleet must run where docker compose up works; otherwise agents may only do static/read-only work |
 | Memdict memory blowup / GC stalls | `--dynamic-space-size` guidance; load once at boot (daemon); measure RSS; per-table opt-in |
 | Flag combinations explode parity space | I2 runs full parity per flag combo; only 4 flags ⇒ 16 combos, scripted |
 | Threaded workers + shared caches | conn.lisp mutex patterns + per-thread connections when DB still hot (S3 off); driver unit-tested first |
@@ -252,30 +252,30 @@ assume the analysis-doc estimates; measure first.
 ## 8. Where the fleet must run (honest deployment note)
 
 **This workspace cannot host the write-fleet:** no SBCL, no settings.lisp, no
-Postgres dump — every agent would be editing blind. Run the fleet on a host
+Postgres dump - every agent would be editing blind. Run the fleet on a host
 where `docker compose up` (or an equivalent manual stack) succeeds, then agents
 have `scripts/parity.sh` and the bench as ground truth. In this session we can
 still usefully fan out **read-only** agents (baseline inventory, query-site
-manifest, split/hint rule categorization, seams.md drafting) — that is Night 1's
+manifest, split/hint rule categorization, seams.md drafting) - that is Night 1's
 reader layer and costs nothing to run without a DB.
 
 ---
 
 ## 9. What cannot be parallelized (and why that's fine)
 
-- **`calc-score` / `find-best-path` / `join-substring-words*` integration** —
+- **`calc-score` / `find-best-path` / `join-substring-words*` integration** - 
   one writer (coordinator). These are the heart of the monolith and every other
   change plugs into them; parallel edits = guaranteed conflicts.
-- **ichiran.asd edits and docker build scripts** — coordinator only.
-- **Parity/golden-corpus runs** — serial by construction (must see each merge
+- **ichiran.asd edits and docker build scripts** - coordinator only.
+- **Parity/golden-corpus runs** - serial by construction (must see each merge
   alone to blame failures).
-- **The guardrail reviews** — a human or the coordinator decides drift calls.
+- **The guardrail reviews** - a human or the coordinator decides drift calls.
 Parallelism lives in the *modules, the analysis, and the verification*, which
 is where the hours actually are; the serial core is a few focused commits per
 round, not a bottleneck once modules are done.
 
 ---
 
-*Companion: `PERFORMANCE-ANALYSIS.md` (analysis, estimates §9) — read first.
+*Companion: `PERFORMANCE-ANALYSIS.md` (analysis, estimates §9) - read first.
 Ready-to-run items pending the environment: scripts/env-check.sh,
 scripts/parity.sh, docs/seams.md, worklogs/ (all C0 deliverables).*

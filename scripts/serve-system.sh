@@ -1,5 +1,5 @@
 #!/bin/bash
-# serve-system.sh — persistent full-romanize server on the system core.
+# serve-system.sh - persistent full-romanize server on the system core.
 #
 # The system core (local-env/ichiran-system-lite.core, built with SYSTEM=1)
 # holds the analyzer + dict in RAM. This keeps ONE warm process serving
@@ -26,7 +26,7 @@ cd "$(dirname "$0")/.." || exit 1
 CORE="${CORE:-local-env/ichiran-system-lite.core}"
 
 if [ ! -f "$CORE" ]; then
-  echo "serve-system.sh: no core at $CORE — run SYSTEM=1 PRESET=lite scripts/build-image.sh --out $CORE first" >&2
+  echo "serve-system.sh: no core at $CORE - run SYSTEM=1 PRESET=lite scripts/build-image.sh --out $CORE first" >&2
   exit 2
 fi
 

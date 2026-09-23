@@ -1,5 +1,5 @@
 #!/bin/bash
-# golden-snapshot.sh — dump full romanize* JSON for every golden-corpus line.
+# golden-snapshot.sh - dump full romanize* JSON for every golden-corpus line.
 # Produces data/golden-corpus-baseline.json (the parity contract for perf work).
 # Usage: golden-snapshot.sh [--out FILE]
 cd "$(dirname "$0")/.." || exit 1

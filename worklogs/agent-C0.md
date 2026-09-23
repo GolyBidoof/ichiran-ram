@@ -1,4 +1,4 @@
-# C0 — Coordinator worklog
+# C0 - Coordinator worklog
 
 ## Environment (done)
 - SBCL 2.6.8 (brew), PostgreSQL 16.15, quicklisp, all deps loaded
@@ -14,7 +14,7 @@
 
 ## Gates so far
 - parity.sh: 764/764 assertions PASSED (1 benign execution error: missing optional
-  jmdict-data/conj.csv fixture — not engine-related; assertions all pass)
+  jmdict-data/conj.csv fixture - not engine-related; assertions all pass)
 - add-errata + romanize probe: OK ("ichiran wa saikō da zo")
 - bench.sh: baseline measurements running → record below
 
@@ -41,7 +41,7 @@ warm:
   AGENT_SMOKE_OK.
 - All scripts (bench/parity/golden) now use scripts/sbcl-wrapped.
 
-## Item 4 (S4 trie) — verified mechanism, memory-blocked deployment
+## Item 4 (S4 trie) - verified mechanism, memory-blocked deployment
 - trie.lisp unit-tested vs brute force (S4_OK earlier).
 - Integration in dict.lisp join-substring-words* behind *trie-p* is present.
 - Full-dictionary trie (8.7M texts) as hash-nodes FATALS SBCL memory (12GB heap).

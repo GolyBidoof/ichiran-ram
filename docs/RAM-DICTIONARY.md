@@ -1,7 +1,7 @@
 # In-RAM Dictionary & Zero-DB Serving (docs/RAM-DICTIONARY.md)
 
 This fork can run ichiran's dictionary lookups from RAM instead of PostgreSQL
-— from a 4-table "lite" config on a laptop up to a full 9-table image on a
+ -  from a 4-table "lite" config on a laptop up to a full 9-table image on a
 big host. Everything is behind flags that default OFF: with flags off, the
 code paths are byte-identical to upstream.
 
@@ -29,7 +29,7 @@ code paths are byte-identical to upstream.
 
 Production RAM serving REQUIRES `src/memdict-compact-shims.lisp` loaded
 (i.e. `(ql:quickload :ichiran/ram)` or the manual `--eval` sequence below):
-`memdict-compact` alone only fills the hashes — without the shims'
+`memdict-compact` alone only fills the hashes - without the shims'
 defmethods on the analyzer generics, RAM rows never reach scoring,
 compounding, or conjugation.
 
@@ -123,7 +123,7 @@ Two rules keep RAM serving correct:
 
 `memdict-call` serves a lookup from RAM only when **all** tables it needs are
 in `*loaded-tables*`; otherwise it returns NIL and the caller uses the DB.
-The senses trio and the conjugation trio gate as units — benchmarks showed
+The senses trio and the conjugation trio gate as units - benchmarks showed
 partial conj loads are *slower* than DB fallback. `memdict-table-loaded-p`
 lets hot paths trust a RAM miss and skip the DB entirely when loaded.
 
@@ -163,11 +163,11 @@ on a 16GB Mac; the full 9-table dump needs 32GB+.
 
 ## Verification
 
-- `scripts/parity.sh` — test suite, must print `PARITY_OK`.
-- `scripts/golden-diff.sh` — byte-identical romanize output vs baseline.
+- `scripts/parity.sh` - test suite, must print `PARITY_OK`.
+- `scripts/golden-diff.sh` - byte-identical romanize output vs baseline.
 - Every `memdict-load` ends with `MEMDICT-VERIFY-OK <table> ram=N db=N`
   per table (row counts vs `SELECT count(*)`). A `VERIFY-FAIL` means the load
-  is corrupt — this gate exists because unordered `LIMIT/OFFSET` paging once
+  is corrupt - this gate exists because unordered `LIMIT/OFFSET` paging once
   silently loaded only 1.55M of 2.5M entry rows. Loads always `ORDER BY` a
   unique key now.
 - `tests.lisp` has `ram-gating-test` + `ram-helpers-test`: fixture-based unit
@@ -194,14 +194,14 @@ the query-shape breakdown: `worklogs/R7-REPORT.md`.
 ## Troubleshooting
 
 - **Heap-exhausted during load/dump**: raise `--dynamic-space-size`
-  (e.g. 14336 on a 16GB Mac) and check the flag actually reached SBCL —
+  (e.g. 14336 on a 16GB Mac) and check the flag actually reached SBCL - 
   `scripts/sbcl-wrapped` honors it but SBCL requires runtime opts before
   `--eval` args, so pass it through the wrapper rather than appending raw
   `sbcl` flags after `--eval`s.
-- **VERIFY-FAIL**: the load is corrupt — `(ichiran/memdict-compact:memdict-reset)`,
+- **VERIFY-FAIL**: the load is corrupt - `(ichiran/memdict-compact:memdict-reset)`,
   then reload fresh in a fresh process (stale/partial state from an earlier
   load in the same image does not clear itself).
-- **Golden drift on one sentence**: re-run first — `golden-diff` is bimodal
+- **Golden drift on one sentence**: re-run first - `golden-diff` is bimodal
   on one knife-edge tiebreak sentence even with all flags off (see Known
   limits); RAM output sits inside the analyzer's natural DB-vs-DB variation.
 
@@ -209,7 +209,7 @@ the query-shape breakdown: `worklogs/R7-REPORT.md`.
 
 - **Knife-edge tiebreaks.** Where two segmentations score (near-)identically
   (`toiu` vs `to`+`iu`, `nanjikara` vs alternatives), DB and RAM can pick
-  different winners because candidate order differs — and DB-vs-DB runs can
+  different winners because candidate order differs - and DB-vs-DB runs can
   too (golden-diff is bimodal on one sentence even with all flags off).
   RAM output sits inside the analyzer's natural variation; deterministic
   tiebreaks are future upstream work.

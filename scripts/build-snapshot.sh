@@ -1,5 +1,5 @@
 #!/bin/bash
-# build-snapshot.sh — write a binary snapshot of the integer dictionary layer.
+# build-snapshot.sh - write a binary snapshot of the integer dictionary layer.
 #
 # Why: loading the integer layer from PostgreSQL costs ~72s on the full
 # dictionary. The layer is flat typed columns plus interned string pools, so it

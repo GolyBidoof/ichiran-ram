@@ -1,13 +1,13 @@
-;;;; src/memdict-int.lisp — integer-keyed compact dictionary (milestone 1).
+;;;; src/memdict-int.lisp - integer-keyed compact dictionary (milestone 1).
 ;;;;
 ;;;; Why: memdict-compact stores one defstruct + hash entries per row
 ;;;; (~2.7GB for kana_text). Most of that is per-row overhead, not data.
 ;;;; This module stores each table as:
-;;;;   - column vectors in id order (fixnum/(unsigned-byte 32) arrays),
-;;;;   - a text-major position array + per-text (start,count) ranges,
-;;;;   - a seq-major position array + dense per-seq (start,count) ranges
+;;;;  - column vectors in id order (fixnum/(unsigned-byte 32) arrays),
+;;;;  - a text-major position array + per-text (start,count) ranges,
+;;;;  - a seq-major position array + dense per-seq (start,count) ranges
 ;;;;     (seq values are dense integers, so direct indexing beats hashing),
-;;;;   - pooled string vectors for texts/tags/readings (stored once).
+;;;;  - pooled string vectors for texts/tags/readings (stored once).
 ;;;; Target: kana_text in ~1.5GB (measured below), full dict servable on 16GB.
 ;;;;
 ;;;; Bare-load safe: pure CL + postmodern, no ichiran deps. All queries take

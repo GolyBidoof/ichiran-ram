@@ -1,4 +1,4 @@
-;;;; src/memdict.lisp — S3: in-memory dictionary for Ichiran.
+;;;; src/memdict.lisp - S3: in-memory dictionary for Ichiran.
 ;;;;
 ;;;; Loads the hot DB tables into RAM at boot so the analyzer's per-candidate
 ;;;; lookups (find-word, get-conj-data, calc-score) never hit PostgreSQL.
@@ -37,14 +37,14 @@
 (defun memdict-load (&key (chunk 100000))
   "Load the kana_text table into memory (text -> rows, seq -> rows), the
    common find-word path (~489MB). kanji_text (5.4M rows) and the huge
-   conjugation tables are NOT loaded as plists — they need a compact binary
+   conjugation tables are NOT loaded as plists - they need a compact binary
    format (future work) and S1 cache (src/cache.lisp) memoizes conj data
    cross-sentence. Returns a stats plist."
   (let ((before (sb-kernel:dynamic-usage)))
     (ichiran/conn:with-db nil
       ;; kana_text as REAL DAO objects via query-dao + raw SQL (bound id/seq/
-      ;; text/ord — usable directly by find-word). ~3.3M rows, ~1.7GB.
-      ;; kanji_text (5.4M rows) as DAOs exhausts memory — compact binary
+      ;; text/ord - usable directly by find-word). ~3.3M rows, ~1.7GB.
+      ;; kanji_text (5.4M rows) as DAOs exhausts memory - compact binary
       ;; format is future work; S1 cache covers conj lookups cross-sentence.
       (loop with offset = 0
             for rows = (ichiran/dict::query-dao 'ichiran/dict::kana-text

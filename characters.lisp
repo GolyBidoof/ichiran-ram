@@ -392,7 +392,7 @@
   (declare (type char-class char-class))
   (when (= stem 0) (return-from destem word))
   ;; Table-driven: collect ALL class-char start positions (like the regex),
-  ;; then take the (stem-1)-th from the end — matching the original
+  ;; then take the (stem-1)-th from the end - matching the original
   ;; (ppcre:do-matches ... push s) + (nthcdr (1- stem) positions).
   (let* ((len (length word))
          (positions nil))

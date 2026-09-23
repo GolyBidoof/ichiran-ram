@@ -1,7 +1,7 @@
 #!/bin/bash
-# build-image.sh — R4: build a serving core image with the compact dict loaded.
+# build-image.sh - R4: build a serving core image with the compact dict loaded.
 #
-# R4 minimal-core path: quickload :postmodern only (NO :ichiran — the
+# R4 minimal-core path: quickload :postmodern only (NO :ichiran - the
 # decoupled memdict-compact depends only on postmodern), load the full compact
 # dict ONCE into the clean heap, dump a core image. Serving from the core is
 # DB-free for the dict-covered path (see serve-core.sh).
@@ -48,7 +48,7 @@ TABLES="${TABLES:-\"kana_text\"}"
 INT_TABLES="${INT_TABLES:-}"
 TRIE_TABLES="${TRIE_TABLES:-}"
 # SYSTEM=1: bake the full analyzer (:ichiran + shims, *memdict-p* on) into the
-# image too — a single file that romanizes with no quickload and no DB for
+# image too - a single file that romanizes with no quickload and no DB for
 # covered paths. Needs more heap (analyzer baseline + dict + dump headroom).
 SYSTEM="${SYSTEM:-}"
 DB_NAME="${ICHIRAN_DB_NAME:-jmdict}"

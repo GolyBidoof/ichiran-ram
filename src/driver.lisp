@@ -1,4 +1,4 @@
-;;;; src/driver.lisp — S5: parallel corpus driver (lparallel).
+;;;; src/driver.lisp - S5: parallel corpus driver (lparallel).
 ;;;;
 ;;;; Scales batch throughput across cores. Each worker processes sentences
 ;;;; through ichiran's romanize*/dict-segment. Postgres connections are
@@ -6,7 +6,7 @@
 ;;;; workers hit the cache instead of contending on the DB.
 ;;;;
 ;;;; Pattern mirrors tests.lisp's parallel harness (lparallel kernel +
-;;;; futures) — see tests.lisp:670-677.
+;;;; futures) - see tests.lisp:670-677.
 
 (defpackage #:ichiran/driver
   (:use #:cl)

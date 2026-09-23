@@ -1,4 +1,4 @@
-;;;; src/trie.lisp — S4/R3: compact character trie for dictionary prefix search.
+;;;; src/trie.lisp - S4/R3: compact character trie for dictionary prefix search.
 ;;;;
 ;;;; Replaces O(N^2) substring probing in join-substring-words (dict.lisp):
 ;;;; instead of testing every (start,end) window against the DB, walk the trie
@@ -8,15 +8,15 @@
 ;;;; R3 COMPACT ENCODING (why the old one fatals at full-dict scale):
 ;;;; The old trie-node used an SBCL hash-table per node (char -> child). Each
 ;;;; hash-table carries ~4KB of fixed allocation regardless of size, and the
-;;;; full dictionary has millions of distinct prefixes — that alone is tens of
+;;;; full dictionary has millions of distinct prefixes - that alone is tens of
 ;;;; GB. This encoding stores:
-;;;;   - ALL edges in ONE fixnum-keyed hash: key = (logior (ash node-id 21)
-;;;;     (char-code ch)) — node-id < 2^43, char-code < 2^21, both fit a fixnum
+;;;;  - ALL edges in ONE fixnum-keyed hash: key = (logior (ash node-id 21)
+;;;;     (char-code ch)) - node-id < 2^43, char-code < 2^21, both fit a fixnum
 ;;;;     on 64-bit SBCL with no consing.
-;;;;   - nodes as payload lists in ONE adjustable vector (index = node-id).
+;;;;  - nodes as payload lists in ONE adjustable vector (index = node-id).
 ;;;; Per-node overhead drops from ~4KB (hash-table) to a single vector slot.
 ;;;;
-;;;; Pure CL — no DB, no ichiran deps. Payloads are opaque; the lattice
+;;;; Pure CL - no DB, no ichiran deps. Payloads are opaque; the lattice
 ;;;; builder decides what to carry (e.g. (table . seq) per word).
 
 (defpackage #:ichiran/trie

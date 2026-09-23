@@ -1,4 +1,4 @@
-# Ichiran Perf Rework — Round 1 Completion Report
+# Ichiran Perf Rework - Round 1 Completion Report
 
 Date: 2026-09. Goal: rework Ichiran for much higher performance per
 IMPLEMENTATION-PLAN.md, verified against a real environment.
@@ -34,13 +34,13 @@ IMPLEMENTATION-PLAN.md, verified against a real environment.
 - Warm daemon: ~284 ms/sentence for a 14-char sentence with :with-info
   (vs ~1.2 s cold + per-invocation startup).
 - S1/S2 reduce *cross-sentence* duplicate lookups (the daemon case) but NOT
-  single-sentence counts — the single-sentence count is dominated by
+  single-sentence counts - the single-sentence count is dominated by
   per-candidate conj-source-reading/conj-prop + gloss queries that are mostly
   unique per seq, so they don't dedup within one sentence.
 
 ## Key findings that reshape the plan
 
-1. **S1 alone doesn't cut single-sentence queries** — each candidate's seq is
+1. **S1 alone doesn't cut single-sentence queries** - each candidate's seq is
    mostly unique within a sentence; dedup only pays across sentences (warm
    daemon). The 500+ queries/sentence come from `get-conj-data`'s per-conj
    sub-queries + the `:with-info` gloss path.
@@ -49,10 +49,10 @@ IMPLEMENTATION-PLAN.md, verified against a real environment.
    (the next S2 step, unfinished). S4 trie cuts candidate count.
 3. **Found + fixed a pre-existing crash**: `find-word`'s `*substring-hash*`
    fast path (`apply 'make-instance` on stale initargs) crashes on cross-
-   sentence reuse — now falls back to DB. (This is exactly the kind of latent
+   sentence reuse - now falls back to DB. (This is exactly the kind of latent
    bug the golden corpus is designed to catch.)
 4. **Subagents in this session cannot run SBCL** (they die silently on any
-   quickload) — all SBCL-backed work was done inline. Read-only analysis
+   quickload) - all SBCL-backed work was done inline. Read-only analysis
    subagents (R3 corpus review) worked and added real value.
 
 ## What remains (next round)
@@ -60,7 +60,7 @@ IMPLEMENTATION-PLAN.md, verified against a real environment.
 - **S3 in-memory dict** (`src/memdict.lisp`): load hot tables into hashes at
   boot; the biggest remaining single-sentence win (kill DB from hot path).
 - **S2 v2**: batch conj-data + gloss/sense lookups per sentence (not just
-  entries) — the next query-count lever.
+  entries) - the next query-count lever.
 - **S4 integration**: swap `join-substring-words*` inner loop to the trie
   behind `*trie-p*`.
 - **I2**: add `--serve` mode to `cli.lisp` main (daemon); flip flags in build

@@ -1,4 +1,4 @@
-;;;; src/daemon.lisp — S5: persistent JSON server for ichiran romanize*.
+;;;; src/daemon.lisp - S5: persistent JSON server for ichiran romanize*.
 ;;;;
 ;;;; Why: per-invocation SBCL startup dominates batch throughput (community
 ;;;; measured 3.9 sentences/s per-line-CLI vs ~40+ with a warm daemon). This
@@ -18,7 +18,7 @@
 
 (defun serve-line (text &key (limit 5))
   "Romanize* TEXT and return its JSON string. On error, return a JSON
-   {\"error\": ...} object — never signal."
+   {\"error\": ...} object - never signal."
   (handler-case
       (jsown:to-json (ichiran:romanize* text :limit limit))
     (error (e)

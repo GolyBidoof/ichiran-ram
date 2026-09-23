@@ -1,4 +1,4 @@
-;;;; src/serve-parallel.lisp — Tier 1: thread-parallel sentence serving.
+;;;; src/serve-parallel.lisp - Tier 1: thread-parallel sentence serving.
 ;;;;
 ;;;; Why: the in-RAM dictionary is read-only after load and sentences are
 ;;;; independent, so a page of text is embarrassingly parallel. Measured on
@@ -72,7 +72,7 @@
    Measured on a 10P+4E machine (140 the visual novel dialogue lines, best of 2):
    8 workers 7.59x, 10 workers 7.82x, 11 workers 6.93x, 13 workers 6.63x,
    14 workers 5.66x. Past the P-core count the extra work lands on
-   efficiency cores, which are far slower, so throughput FALLS — using
+   efficiency cores, which are far slower, so throughput FALLS - using
    cpu-count-1 as the default (13 here) was 15% slower than the optimum."
   (or *workers*
       (setf *workers*
@@ -83,7 +83,7 @@
                          (if cpus (max 1 (1- cpus)) 4)))))))
 
 (defun romanize-safe (text)
-  "Romanize TEXT, or an ERROR: line — never signals, so one bad sentence
+  "Romanize TEXT, or an ERROR: line - never signals, so one bad sentence
    cannot kill a worker."
   (if (zerop (length text))
       ""
@@ -162,7 +162,7 @@
   "Bind per-thread copies of the memo tables written during serving, and a
    PRIVATE DB connection. Postmodern's *database* is a global special, so a
    worker that inherited the parent's connection object would use it
-   concurrently and corrupt the protocol — each worker opens its own."
+   concurrently and corrupt the protocol - each worker opens its own."
   `(let ((ichiran/dict::*is-arch-cache*
            (copy-memo-table (ichiran/dict::ensure :is-arch)))
          (ichiran/kanji::*reading-cache*

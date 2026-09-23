@@ -1,5 +1,5 @@
 #!/bin/bash
-# serve-snapshot.sh — full-RAM serving without a baked core.
+# serve-snapshot.sh - full-RAM serving without a baked core.
 #
 # Why this exists: serve-system.sh needs a saved core, and baking the FULL
 # dictionary into one needs a 32GB+ host (see build-image.sh). The snapshot

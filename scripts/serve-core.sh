@@ -1,5 +1,5 @@
 #!/bin/bash
-# serve-core.sh — R4: run the zero-DB serving core as a persistent stdin->JSON
+# serve-core.sh - R4: run the zero-DB serving core as a persistent stdin->JSON
 # lookup server.
 #
 # The core (local-env/ichiran-serving.core, built by build-image.sh) holds the
@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 CORE="${CORE:-local-env/ichiran-serving.core}"
 
 if [ ! -f "$CORE" ]; then
-  echo "serve-core.sh: no core at $CORE — run scripts/build-image.sh first" >&2
+  echo "serve-core.sh: no core at $CORE - run scripts/build-image.sh first" >&2
   exit 2
 fi
 

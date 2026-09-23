@@ -1,5 +1,5 @@
 #!/bin/bash
-# warm.sh — control a single long-lived warmed ichiran process, so measurements
+# warm.sh - control a single long-lived warmed ichiran process, so measurements
 # cost seconds instead of paying Quicklisp + dictionary load every time.
 #
 #   warm.sh start          boot the server (takes ~15s, once)

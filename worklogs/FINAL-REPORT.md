@@ -1,4 +1,4 @@
-# Ichiran Perf Rework — Final Report (Goal I2)
+# Ichiran Perf Rework - Final Report (Goal I2)
 
 Date: 2026-09. All plan items implemented, committed, parity-verified.
 
@@ -20,15 +20,15 @@ Date: 2026-09. All plan items implemented, committed, parity-verified.
 | 1. S3 in-memory dict | `src/memdict.lisp` + `find-word` hook | ✅ | kana_text DAO index (3.3M rows); measured 38× on kana-heavy (1.22s→0.032s single-shot) |
 | 2. S6 char-scans | `characters.lisp` | ✅ | table-driven `consecutive-char-groups`/`destem`; A/B vs regex + golden parity |
 | 3. S2-v2 batching | `src/cache.lisp` + `dict.lisp` | ✅ | batch conj + sense/gloss prefetch; query count −15–20% (707→570 etc.) |
-| 4. S4 trie | `src/trie.lisp` + integration | ⚠️ mechanism ✅, deploy blocked | unit-verified vs brute force; full-dict hash-node trie exceeds memory — needs compact encoding (documented) |
+| 4. S4 trie | `src/trie.lisp` + integration | ⚠️ mechanism ✅, deploy blocked | unit-verified vs brute force; full-dict hash-node trie exceeds memory - needs compact encoding (documented) |
 | 5. compile/alloc polish | `dict.lisp` | ✅ | `(speed 3)(safety 1)(debug 1)` on 4 hot functions (was `debug 3` self-defeating) |
 | 6. I2 daemon `--serve` | `cli.lisp` + `src/daemon.lisp` | ✅ | `ichiran-cli --serve` tested live: sentences in → valid JSON out |
 
 ## Deployment wins
-- **`ichiran-cli --serve`**: persistent warm process — the ecosystem-proven throughput fix
+- **`ichiran-cli --serve`**: persistent warm process - the ecosystem-proven throughput fix
   (community measured 3.9 → ~41 sentences/s with a warm daemon; this delivers the daemon).
 - **`src/driver.lisp`**: lparallel pool for corpus throughput (verified 4-thread ordered).
-- **S1 cache** (`*use-cache-p*`): memoizes entry/posi/uk/conj per seq — cross-sentence reuse in the daemon.
+- **S1 cache** (`*use-cache-p*`): memoizes entry/posi/uk/conj per seq - cross-sentence reuse in the daemon.
 
 ## Honest limits
 - Query count on long/kanji sentences still ~1000 (the `:with-info` gloss path per word is
@@ -43,7 +43,7 @@ To fully revert all perf changes: `git checkout <pre-perf-commit>` (47eb22e = pr
 ## Git state
 25 commits from baseline. Working tree clean. `scripts/{env-check,parity,golden-snapshot,golden-diff,bench,sbcl-wrapped}.sh` all functional.
 
-## Gloss-batching deep-dive (S2-v2c/d attempts) — findings
+## Gloss-batching deep-dive (S2-v2c/d attempts) - findings
 - The :with-info query cost is NOT get-senses-raw (SENSES cache stats stayed (0 0));
   it's reading-str-seq (2 queries/word: kanji_text + kana_text by seq+ord) and
   short-sense-str (1 query/word), plus get-conj-data sub-queries.
@@ -52,10 +52,10 @@ To fully revert all perf changes: `git checkout <pre-perf-commit>` (47eb22e = pr
 - S2-v2 (conj + sense/gloss batch prefetch) keeps a real ~15% query reduction
   (707→570, 1141→1107) with parity green.
 - Conclusion: the "single-digits per sentence" target needs the FULL in-memory
-  dictionary incl. glosses (S3 extension) — the plan's documented future work.
+  dictionary incl. glosses (S3 extension) - the plan's documented future work.
   Memoization can't beat per-unique-seq DB lookups within one sentence.
 
-## R1 compact dict — memory findings (hardware constraint)
+## R1 compact dict - memory findings (hardware constraint)
 - Compact struct load (kana 3.3M rows) = ~2.8GB steady-state, VERIFIED correct
   output via sampled load (271K rows → konnichiwa, hint fix included).
 - FULL load + DB-driven analyzer does NOT fit 16GB SBCL heap (SBCL max on this
@@ -68,7 +68,7 @@ To fully revert all perf changes: `git checkout <pre-perf-commit>` (47eb22e = pr
 
 ---
 
-# Session 2 — R2–R4 architectural work (this handover round)
+# Session 2 - R2–R4 architectural work (this handover round)
 
 Date: 2026-09. Four commits on top of the S1–S6 baseline. All flags default
 OFF (zero behavior change unless enabled). Parity 782/782 + golden
@@ -80,8 +80,8 @@ byte-identical re-verified at the end.
 |---|---|---|---|
 | `48de65c` | **S2-v3 nil-sentinel** | `find-word`'s substring-hash path: distinguish "checked, not a dict word" (present, NIL value → return NIL) from "no hash bound" (DB query). `find-substring-words` seeds every window part to NIL and fills plists only for DB hits; the old `(and *substring-hash* (gethash ...))` short-circuited on NIL, firing a SELECT for every non-dictionary substring (~200 queries/kanji sentence). | A/B output identical (0 diffs); parity + golden green; fresh-process query cuts 12–33% (一覧 153→126, 錬丹術 905→732/888, これさえ 734→491/509) |
 | `6aaefb8` | **R4 decouple memdict-compact** | `src/memdict-compact.lisp` now `:use`s only cl+postmodern (was +ichiran/conn). `with-db-connection` uses postmodern directly with a `:conn` spec (defaults to ichiran/conn:*connection* when present). Analyzer shims moved to new `src/memdict-compact-shims.lisp` (loaded only in the full-ichiran context). Exported compact accessors/makers. | Bare load OK (quickload :postmodern only); full load OK (shims install); sampled load + memdict-find こんにちは OK |
-| `cd29d15` | **R3 compact trie** | Old trie: one SBCL hash-table per node (~4KB fixed each → tens of GB at full-dict scale → Heap exhausted). New: ALL edges in ONE fixnum-keyed hash (`logior (ash node-id 21) (char-code ch)`), nodes as payload lists in ONE adjustable vector. | Correctness 0 mismatches vs brute force; scale 1M entries → 1.58M nodes in **198 MB** (~198 B/entry; old encoding would be ~4KB/node ≈ 6GB+). Projected full-dict (8.4M texts) ~1.6GB — fits. API unchanged (`(end . payloads)`). |
-| `fd35e4a` | **R4 minimal-core image path** | `build-image.sh` rewritten: quickload :postmodern only → load full compact dict → clear pool → dump core. | **Full kana_text compact load (3,079,757 rows, ~3GB delta) succeeds bare in an 8GB heap** — this fataled before when loaded on top of the 13GB :ichiran baseline. The save-lisp-and-die dump step still needs ~2× dict headroom; on this Mac's 16GB SBCL cap it exhausts at ~4GB used — a documented bigger-heap-host requirement (Linux x86-64 SBCL, 32GB+), not a code defect. |
+| `cd29d15` | **R3 compact trie** | Old trie: one SBCL hash-table per node (~4KB fixed each → tens of GB at full-dict scale → Heap exhausted). New: ALL edges in ONE fixnum-keyed hash (`logior (ash node-id 21) (char-code ch)`), nodes as payload lists in ONE adjustable vector. | Correctness 0 mismatches vs brute force; scale 1M entries → 1.58M nodes in **198 MB** (~198 B/entry; old encoding would be ~4KB/node ≈ 6GB+). Projected full-dict (8.4M texts) ~1.6GB - fits. API unchanged (`(end . payloads)`). |
+| `fd35e4a` | **R4 minimal-core image path** | `build-image.sh` rewritten: quickload :postmodern only → load full compact dict → clear pool → dump core. | **Full kana_text compact load (3,079,757 rows, ~3GB delta) succeeds bare in an 8GB heap** - this fataled before when loaded on top of the 13GB :ichiran baseline. The save-lisp-and-die dump step still needs ~2× dict headroom; on this Mac's 16GB SBCL cap it exhausts at ~4GB used - a documented bigger-heap-host requirement (Linux x86-64 SBCL, 32GB+), not a code defect. |
 
 ## Measured (fresh process, cache ON; this session's bench)
 
@@ -111,19 +111,19 @@ attempted and reverted (seq-set key mismatch → query explosion).
 - R4 serving-core DUMP needs a bigger-heap host (Linux x86-64 SBCL, 32GB+);
   the load is proven viable in the minimal bare heap.
 
-# Session 2b — R4 serving core BUILT (wrapper heap bug was the real blocker)
+# Session 2b - R4 serving core BUILT (wrapper heap bug was the real blocker)
 
 Date: 2026-09. The R4 zero-DB serving core now WORKS on this machine.
 
 ## The critical discovery
 `scripts/sbcl-wrapped` silently DISCARDED user `--dynamic-space-size`
 (runtime=(--dynamic-space-size 4096 ...); the arg parser did `shift 2` with
-NO replacement). Every "16GB" run was actually 4GB — the R4 dump attempts
+NO replacement). Every "16GB" run was actually 4GB - the R4 dump attempts
 exhausted at exactly 4294967296 bytes. Fixed (commit `d0a75a6`): the user's
 size now replaces the default in place. Verified: `--dynamic-space-size
 14336` → 14GB heap; default stays 4GB.
 
-## R4 serving core — WORKING (commits `293751c`, `bbe6968`, `118b5f1`)
+## R4 serving core - WORKING (commits `293751c`, `bbe6968`, `118b5f1`)
 
 | Artifact | State |
 |---|---|
@@ -135,14 +135,14 @@ size now replaces the default in place. Verified: `--dynamic-space-size
 
 ## Updated honest limits
 - Kana-only serving core: fully works on this Mac (covers the romanize
-  kana-lookup path — the S3 38× win).
+  kana-lookup path - the S3 38× win).
 - Full kana+kanji core dump: needs a 32GB+ host (Linux x86-64 SBCL). The
   load is proven; only save-lisp-and-die headroom is missing here.
-- Analyzer-on-core (romanize end-to-end DB-free): not yet wired — the core
+- Analyzer-on-core (romanize end-to-end DB-free): not yet wired - the core
   serves dict lookups; the full romanize path still needs the analyzer
   loaded on top (dict-covered queries served from RAM).
 
-# Session 2c — analyzer-on-core WORKS, byte-identical output (R4 complete)
+# Session 2c - analyzer-on-core WORKS, byte-identical output (R4 complete)
 
 Date: 2026-09. The R4 zero-DB serving image is now functionally complete.
 
@@ -167,7 +167,7 @@ quickloads on top and romanizes identically. Remaining DB queries are the
 calc-score scoring lookups (documented R1-extension / bigger-heap full-dict
 core territory), not correctness issues.
 
-# Session 3 — R5: full in-RAM dictionary for a 64GB host
+# Session 3 - R5: full in-RAM dictionary for a 64GB host
 
 Date: 2026-09. Commits `35082d9`, `591795f`. All flags default OFF; parity
 782/782 + golden byte-identical verified.
@@ -175,20 +175,20 @@ Date: 2026-09. Commits `35082d9`, `591795f`. All flags default OFF; parity
 ## What was built
 
 1. **Full-dict loaders** (`src/memdict-compact.lisp`): `memdict-load` now
-   loads ALL tables by default — kana_text, kanji_text, entry, conjugation,
-   conj_prop, conj_source_reading, sense, gloss, sense_prop — as compact
+   loads ALL tables by default - kana_text, kanji_text, entry, conjugation,
+   conj_prop, conj_source_reading, sense, gloss, sense_prop - as compact
    structs with interned strings, building the analyzer's indexes
    (text/seq by-table, entry-by-seq, conj-by-seq/from, conj-prop/csr by id,
    sense-by-seq, gloss/prop by sense-id).
 
 2. **RAM lookups mirroring the analyzer's DB queries** (DB-identical shapes):
-   - `memdict-entry-by-seq` (entry DAO accessors shimmed: root-p/n-kanji/...)
-   - `memdict-senses-raw` (verified EQUAL vs get-senses-raw for seq 1289400
+  - `memdict-entry-by-seq` (entry DAO accessors shimmed: root-p/n-kanji/...)
+  - `memdict-senses-raw` (verified EQUAL vs get-senses-raw for seq 1289400
      incl. the pos/s_inf/stagk/stagr/field tag filter)
-   - `memdict-non-arch-posi` (membership-equivalent; DB has no ORDER BY)
-   - `memdict-uk` (row-count equal; rows carry sense-id)
-   - `memdict-conj-data` ((conj src-map props) triples; props id-ordered)
-   - `memdict-has-conj-p` (for the no-conj-data guard)
+  - `memdict-non-arch-posi` (membership-equivalent; DB has no ORDER BY)
+  - `memdict-uk` (row-count equal; rows carry sense-id)
+  - `memdict-conj-data` ((conj src-map props) triples; props id-ordered)
+  - `memdict-has-conj-p` (for the no-conj-data guard)
 
 3. **Analyzer wiring** (`dict.lisp`, behind `*memdict-p*` default OFF):
    find-word kana+kanji, calc-score entry/uk/posi, get-senses-raw,
@@ -215,7 +215,7 @@ dictionary. Fits a 64GB host comfortably.
 ## 64GB deployment path (how the user runs it)
 
 ```bash
-# 1. Load ALL tables into RAM (production loader — not a slice):
+# 1. Load ALL tables into RAM (production loader - not a slice):
 ./scripts/sbcl-wrapped --dynamic-space-size 49152 --non-interactive \
   --eval '(ql:quickload :ichiran :silent t)' \
   --eval '(load "src/memdict-compact.lisp")' \
@@ -228,12 +228,12 @@ dictionary. Fits a 64GB host comfortably.
 ```
 
 Verification on the 64GB host: run `scripts/parity.sh` and
-`scripts/golden-diff.sh` with `*memdict-p*` ON and compare — the contract is
+`scripts/golden-diff.sh` with `*memdict-p*` ON and compare - the contract is
 byte-identical output to the DB path.
 
 ## Known residual (documented honestly)
 - On THIS Mac (16GB heap cap) the full load exhausts after ~6 of 9 tables
-  (kana+kanji+entry+conj+conj_prop before conj_source_reading) — a memory
+  (kana+kanji+entry+conj+conj_prop before conj_source_reading) - a memory
   limit, not a code defect. The load works on 64GB.
 - Slice-based verification of full romanize parity is unreliable (the
   te-iru decomposition しています shows a segmentation difference caused by

@@ -1,4 +1,4 @@
-# C0 — I1 integration design (prepared while A1 runs)
+# C0 - I1 integration design (prepared while A1 runs)
 
 Goal G1: with *use-cache-p* on, per-sentence queries drop >=3x vs baseline
 (measured 139-1041). Wire A1's src/cache.lisp into calc-score's DB sites.
@@ -24,7 +24,7 @@ Strategy:
 - Flag default OFF => zero behavior change; parity must stay green with flag off,
   and ALSO green with flag on (values must be identical DAOs).
 - Invalidation: tests / add-errata call (cache:cache-reset). The 764-test suite
-  runs add-errata? No — tests run against warmed caches; but dict-errata may
+  runs add-errata? No - tests run against warmed caches; but dict-errata may
   mutate DB. Coordinator: call cache-reset at start of run-all-tests via a
   wrapper if cache ever ON during tests. Keep flag OFF for the official parity run.
 - Gate G1 measurement: bench.sh with flag ON vs OFF on same sentences.

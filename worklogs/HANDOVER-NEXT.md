@@ -1,13 +1,13 @@
-# Ichiran Performance Work — Handover for the Next Agent
+# Ichiran Performance Work - Handover for the Next Agent
 
 *Written 2026-09 after the R1–R5 + benchmarking sessions. This supersedes the
 earlier `HANDOVER.md` addendums for anything that conflicts. Everything here
-is grounded in actual session results — verify with the listed commands, don't
+is grounded in actual session results - verify with the listed commands, don't
 trust prose.*
 
 ---
 
-## 0. TL;DR — where things stand
+## 0. TL;DR - where things stand
 
 - **A working environment**: SBCL 2.6.8 + PostgreSQL 16 (`jmdict` db) +
   quicklisp, all writable state in-workspace (`local-env/`). Parity 782/782,
@@ -18,7 +18,7 @@ trust prose.*
 - **The #1 historical blocker was a wrapper bug**, now fixed: see §3.
 - **Open problem for the next agent**: one conjugation-parity gap
   (te-iru decomposition: DB splits しています → して+います, RAM → してい+ます)
-  that needs a full-dict load to debug — see §7. And the full-dict core dump
+  that needs a full-dict load to debug - see §7. And the full-dict core dump
   needs a 64GB host (this Mac caps SBCL at 16GB).
 
 ---
@@ -27,7 +27,7 @@ trust prose.*
 
 | Component | How to use |
 |---|---|
-| SBCL | `scripts/sbcl-wrapped` — THE ONLY way to run SBCL. Sets in-workspace fasl/quicklisp. |
+| SBCL | `scripts/sbcl-wrapped` - THE ONLY way to run SBCL. Sets in-workspace fasl/quicklisp. |
 | PostgreSQL | `localhost:5432`, db/user `jmdict`, password `password` (data in `local-env/pgdata/`). If it's down: `pg_ctl start -D local-env/pgdata`. |
 | Parity | `./scripts/parity.sh` → `PARITY_OK` (782/782) |
 | Golden | `./scripts/golden-diff.sh` → `GOLDEN_DIFF_OK` (byte-identical) |
@@ -41,7 +41,7 @@ replicate it.
 
 **Loading order for any test script**: always
 `--eval '(ql:quickload :ichiran :silent t)'` THEN
-`--eval '(load "src/memdict-compact.lisp")'` THEN `--load <your file>` —
+`--eval '(load "src/memdict-compact.lisp")'` THEN `--load <your file>` - 
 otherwise your file fails at READ time with "Package X does not exist".
 
 ---
@@ -55,7 +55,7 @@ otherwise your file fails at READ time with "Package X does not exist".
 | `35082d9` | R5 full-dict loaders (all 9 tables) + RAM lookups (senses-raw, non-arch-posi, uk, entry-by-seq, conj-data, has-conj-p) | loads bare + with ichiran |
 | `c72534b` | adjoin-word shims for compact structs (analyzer runs on serving core) | core romanize byte-identical |
 | `118b5f1` | memdict-load `:tables` param (kanji too); build-image.sh TABLES knob | kana+kanji load verified |
-| `bbe6968` | `scripts/serve-core.sh` — zero-DB stdin→JSON dict-lookup server | live: こんにちは → correct row, miss → `[]` |
+| `bbe6968` | `scripts/serve-core.sh` - zero-DB stdin→JSON dict-lookup server | live: こんにちは → correct row, miss → `[]` |
 | `293751c` | `sbcl-wrapped --core` support (skip quicklisp setup for core images) | core loads, stats shown |
 | `d0a75a6` | **CRITICAL**: fix `sbcl-wrapped` discarding `--dynamic-space-size` | 14GB heap now honored (was always 4GB) |
 | `fd35e4a` | R4 minimal-core build path (postmodern only) | full kana dict bare load fits 8GB |
@@ -64,7 +64,7 @@ otherwise your file fails at READ time with "Package X does not exist".
 | `48de65c` | S2-v3 substring-hash nil-sentinel (skip DB probe for non-dict substrings) | 12–33% fewer queries, output identical |
 
 Earlier baseline (before this agent's rounds): S1 cache, S2 batching,
-S3 DAO memdict, S5 daemon+driver, S6 char-scans — all behind flags.
+S3 DAO memdict, S5 daemon+driver, S6 char-scans - all behind flags.
 
 ---
 
@@ -72,16 +72,16 @@ S3 DAO memdict, S5 daemon+driver, S6 char-scans — all behind flags.
 
 1. **`sbcl-wrapped` discarded `--dynamic-space-size`** (commit `d0a75a6`).
    The parser did `shift 2` with NO replacement, so every run used the 4GB
-   default — ALL earlier "16GB" attempts (incl. the pre-session R4 core
+   default - ALL earlier "16GB" attempts (incl. the pre-session R4 core
    builds) actually ran at 4GB and "heap exhausted at exactly 4294967296
    bytes". If a future build "exhausts at 4GB", check the wrapper flag
    handling first.
 
 2. **The 16GB wall is really two walls**:
-   - (a) loading the compact dict ON TOP of the `:ichiran` analyzer baseline
-     — FIXED by decoupling memdict-compact (loads with postmodern only);
+  - (a) loading the compact dict ON TOP of the `:ichiran` analyzer baseline
+    - FIXED by decoupling memdict-compact (loads with postmodern only);
      full kana+kanji (~7GB) fits an 8GB bare heap.
-   - (b) `save-lisp-and-die` needs ~2× dict headroom — kana-only core (3GB
+  - (b) `save-lisp-and-die` needs ~2× dict headroom - kana-only core (3GB
      dict → 129MB compressed core) builds on this Mac; full 9-table
      (12.2GB raw, ~13–16GB with indexes) load works but the DUMP exceeds
      16GB. Needs a 32–64GB host (the user has 64GB).
@@ -92,7 +92,7 @@ S3 DAO memdict, S5 daemon+driver, S6 char-scans — all behind flags.
    in doubt, re-run it alone with a clean /tmp. The committed state IS
    byte-identical (verified multiple times).
 
-4. **worklogs/ is gitignored** — the `.md` files there (FINAL-REPORT.md,
+4. **worklogs/ is gitignored** - the `.md` files there (FINAL-REPORT.md,
    TABLE-BENCHMARK.md, HANDOVER*.md) exist only on disk, not in git. Code
    commits are what matter.
 
@@ -128,7 +128,7 @@ for seq 1289400, incl. the pos/s_inf/stagk/stagr/field tag filter),
 
 **Table gating** (`memdict-call` in dict.lisp): each lookup only serves from
 RAM when its required table is in `*loaded-tables*`; otherwise NIL → DB
-fallback. This makes partial loads correct (found by the benchmark — see §6).
+fallback. This makes partial loads correct (found by the benchmark - see §6).
 
 ---
 
@@ -145,7 +145,7 @@ fallback. This makes partial loads correct (found by the benchmark — see §6).
 
 ---
 
-## 6. Per-table benchmark — what helps which sentences (the repo pitch)
+## 6. Per-table benchmark - what helps which sentences (the repo pitch)
 
 Method + full results in `worklogs/TABLE-BENCHMARK.md` (`bench-config.lisp`,
 one process per config, S1 cache OFF). 8-sentence corpus across hiragana /
@@ -153,19 +153,19 @@ katakana / kana+kanji / kanji-heavy / paragraph.
 
 | Config | Total queries | vs DB-only |
 |---|---|---|
-| DB-only | 5919 | — |
+| DB-only | 5919 | - |
 | +kana_text | 4871 | −17.7% |
 | +kanji_text | 4302 | −27.3% |
 | **+sense+gloss+sense_prop** | **2135** | **−63.9%** ← the big win (only ~0.6GB) |
 | +conjugation ALONE | 3132 | −47.1% but WORSE than senses-only |
-| +conj_prop (no csr) | 4899 | −17.2% (worse — trio needed) |
+| +conj_prop (no csr) | 4899 | −17.2% (worse - trio needed) |
 
 **Recommended load order (impact-per-GB, differs from naive order):**
-1. kana_text (2.7GB) — foundation, −18%
-2. kanji_text (4.3GB) — foundation, −27%
-3. **sense + gloss + sense_prop (0.6GB)** — the big win, −64%
-4. entry (0.6GB) — cheap, small extra
-5. conjugation + conj_prop + conj_source_reading (4.6GB) — as a full trio,
+1. kana_text (2.7GB) - foundation, −18%
+2. kanji_text (4.3GB) - foundation, −27%
+3. **sense + gloss + sense_prop (0.6GB)** - the big win, −64%
+4. entry (0.6GB) - cheap, small extra
+5. conjugation + conj_prop + conj_source_reading (4.6GB) - as a full trio,
    last (conj tables HURT if loaded partially).
 
 **Per-sentence-type**: hiragana/katakana need kana_text+senses; kanji-heavy
@@ -174,7 +174,7 @@ three.
 
 ---
 
-## 7. What did NOT work (measured, reverted / open) — save the next agent time
+## 7. What did NOT work (measured, reverted / open) - save the next agent time
 
 1. **R2 per-winning-sentence batching of reading-str-seq + short-sense-str**
    (handover §5's design): implemented, measured **NET-NEGATIVE** in fresh
@@ -188,7 +188,7 @@ three.
 3. **Slice-based full-parity testing is unreliable**: hand-rolled partial
    loads pollute hash keys (a います row landed under the wrong key in one
    test) and can't reproduce complete scoring context. **Don't debug parity
-   with slices — use the full `memdict-load` on a 64GB host.**
+   with slices - use the full `memdict-load` on a 64GB host.**
 
 4. **The te-iru conjugation-parity gap (OPEN)**: for 日本語を勉強しています,
    DB splits しています → して + います ("shite imasu"), RAM → してい + ます
@@ -201,7 +201,7 @@ three.
 5. **Full 9-table core dump** exceeds this Mac's 16GB SBCL cap (load works;
    dump needs 32GB+). Not a code defect.
 
-6. **conj tables loaded partially make queries WORSE** (§6) — must be a trio.
+6. **conj tables loaded partially make queries WORSE** (§6) - must be a trio.
 
 ---
 

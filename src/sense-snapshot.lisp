@@ -1,4 +1,4 @@
-;;;; src/sense-snapshot.lisp — persist the sense layer so the RAM path needs no
+;;;; src/sense-snapshot.lisp - persist the sense layer so the RAM path needs no
 ;;;; PostgreSQL at all.
 ;;;;
 ;;;; Why: the integer layer already comes from a snapshot, but sense, gloss and

@@ -398,7 +398,7 @@
                                                        :prop prop
                                                        :src-map fsrc-map))))))
   ;; S2-v2: when the per-sentence conj batch is loaded (cache enabled +
-  ;; prefetch-conj-data ran), serve from it — zero DB queries. The batch is
+  ;; prefetch-conj-data ran), serve from it - zero DB queries. The batch is
   ;; keyed by conj-id; rebuild the same conj-data structs get-conj-data would.
   (when (and (cache-enabled-p) (find-package :ichiran/cache) (cache-call 'conj-batch))
     (let* ((batch (cache-call 'conj-batch))
@@ -648,7 +648,7 @@
         ((and present-p (null inits) (not root-only))
          nil)
         ((and present-p (not root-only))
-         ;; R6: RAM-seeded entries are (:compact . rows) — compact structs
+         ;; R6: RAM-seeded entries are (:compact . rows) - compact structs
          ;; already satisfy the reading interface via the shims; return a
          ;; fresh spine (find-word-full nconcs results, which must never
          ;; mutate the sentence hash or the RAM index).
@@ -732,7 +732,7 @@
                   (if (test-word part :kana) (push part kana-keys) (push part kanji-keys)))))
     ;; Loaded sides seed from RAM; unloaded sides keep the batched DB IN
     ;; query (a NIL entry there would wrongly suppress the DB fallback, since
-    ;; NIL-present means "checked, not a word" — and the unloaded side was
+    ;; NIL-present means "checked, not a word" - and the unloaded side was
     ;; never checked). Either path preserves the miss-sentinel contract.
     (let ((kana-loaded (memdict-table-loaded-p "kana_text"))
           (kanji-loaded (memdict-table-loaded-p "kanji_text")))
@@ -1469,7 +1469,7 @@
     (let ((fn (memdict-fn fn-name)))
       (when fn
         ;; equalp: fn-name arrives uppercase ("MEMDICT-…") while the table
-        ;; lists lowercase names — compare case-insensitively.
+        ;; lists lowercase names - compare case-insensitively.
         (let ((needs (cdr (assoc (string fn-name) *memdict-needs-table*
                                  :test 'equalp))))
           (if (or (null needs)
@@ -1478,7 +1478,7 @@
               (apply fn args)
               nil))))))
 
-;;; Perf: S4 trie — when enabled (and ichiran/trie is loaded), the inner
+;;; Perf: S4 trie - when enabled (and ichiran/trie is loaded), the inner
 ;;; window loop in join-substring-words* only probes (start,end) pairs that
 ;;; are valid dictionary prefixes per the trie, instead of every window.
 ;;; Default OFF. Set *ichiran-trie* to a trie built over the dictionary's
@@ -1486,7 +1486,7 @@
 (defvar *trie-p* nil)
 (defvar *ichiran-trie* nil)
 
-;;; Perf: S3 in-memory dictionary — when enabled (and ichiran/memdict is
+;;; Perf: S3 in-memory dictionary - when enabled (and ichiran/memdict is
 ;;; loaded + memdict-load called), find-word serves kana lookups from RAM.
 ;;; Default OFF.
 (defvar *memdict-p* nil)

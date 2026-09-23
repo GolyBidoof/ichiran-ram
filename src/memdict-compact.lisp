@@ -135,7 +135,7 @@
    order-correct regardless of load history: unlike nreverse, sorting is
    a fixed point, so incremental/second loads cannot un-flip previously
    normalized lists (re-loading an already-loaded table still duplicates
-   rows — pre-existing behavior, out of scope — but order stays ascending
+   rows - pre-existing behavior, out of scope - but order stays ascending
    id). Gloss display order is re-sorted by ord at read time in
    memdict-glosses-by-sense, so id order at rest is fine.
    Without this, RAM lookups return reversed-DB order
@@ -188,7 +188,7 @@
   *complete-tables*)
 
 (defun memdict-verify-counts (tables get-db-count)
-  "Compare in-RAM row totals against the DB for TABLES (fresh loads only —
+  "Compare in-RAM row totals against the DB for TABLES (fresh loads only - 
    incremental reloads duplicate push-built lists). GET-DB-COUNT is a function
    of table name. Prints VERIFY_OK/VERIFY_FAIL lines; returns T iff all match."
   (let ((ok t))
@@ -206,7 +206,7 @@
                                     "conj_prop" "conj_source_reading" "sense" "gloss"
                                     "sense_prop")))
   "Load TABLES as compact structs with interned strings. Default: ALL tables
-   (the full in-RAM dictionary; ~12-16GB with indexes — for a 64GB host).
+   (the full in-RAM dictionary; ~12-16GB with indexes - for a 64GB host).
    Pass :tables '(\"kana_text\" \"kanji_text\") for the light serving core.
    CONN is a postmodern connection spec (defaults to ichiran/conn's
    *connection* when that package is loaded).
@@ -218,7 +218,7 @@
       (flet ((load-table (table maker &key (order-by "id"))
                ;; ORDER BY a unique key is REQUIRED (not just nice): without
                ;; it, Postgres may parallelize/reshuffle the scan and LIMIT/
-               ;; OFFSET pages overlap — rows load twice and others never
+               ;; OFFSET pages overlap - rows load twice and others never
                ;; load (measured: entry stopped at 1.55M/2.5M with silent
                ;; missing rows). entry has no id column; seq is its key.
                (loop with offset = 0
@@ -915,9 +915,9 @@
 
 (defun memdict-conj-data (seq &optional from/conj-ids)
   "Return list of (conj src-map props) for SEQ filtered by FROM/CONJ-IDS:
-   - conj    : compact-conj
-   - src-map : list of (text . source-text) from conj_source_reading
-   - props   : list of compact-conj-prop
+  - conj    : compact-conj
+  - src-map : list of (text . source-text) from conj_source_reading
+  - props   : list of compact-conj-prop
    Mirrors the raw pieces ichiran/dict::get-conj-data's DB path reads.
    Conj rows sorted by id (DB select-dao order); src-map in csr-id order."
   (if (int-conj-tables-present-p)

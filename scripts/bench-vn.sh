@@ -1,5 +1,5 @@
 #!/bin/bash
-# bench-vn.sh [ram|db] — cold-start benchmark over the visual-novel sample.
+# bench-vn.sh [ram|db] - cold-start benchmark over the visual-novel sample.
 # Reports system load, dictionary load, the first (cold) pass, and best-of-3,
 # so the cost of STARTING is visible separately from the cost of READING.
 cd "$(dirname "$0")/.." || exit 1

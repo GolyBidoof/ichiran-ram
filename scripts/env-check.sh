@@ -1,5 +1,5 @@
 #!/bin/bash
-# env-check.sh — assert the perf-work environment is live. Exit 0 = ready.
+# env-check.sh - assert the perf-work environment is live. Exit 0 = ready.
 set -e
 
 echo "== SBCL ==";        command -v sbcl && sbcl --version | head -1

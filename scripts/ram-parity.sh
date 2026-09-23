@@ -1,5 +1,5 @@
 #!/bin/bash
-# ram-parity.sh — require the RAM path's output to be byte-identical to the
+# ram-parity.sh - require the RAM path's output to be byte-identical to the
 # database baseline over the whole golden corpus.
 #
 # Why this exists: golden-snapshot.sh loads only :ichiran and :ichiran/cli, so

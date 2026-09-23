@@ -1,5 +1,5 @@
 #!/bin/bash
-# bench-all.sh — final comparison: cold and warm, database vs RAM snapshot vs
+# bench-all.sh - final comparison: cold and warm, database vs RAM snapshot vs
 # baked core, over every benchmark corpus. Reports wall time end to end (so the
 # cost of STARTING is included) alongside the in-process numbers.
 cd "$(dirname "$0")/.." || exit 1

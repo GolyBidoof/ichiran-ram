@@ -1,5 +1,5 @@
 #!/bin/bash
-# bench.sh — measure ichiran performance: query counts, consing, wall time.
+# bench.sh - measure ichiran performance: query counts, consing, wall time.
 # Baseline measurement tool for the perf work (analysis §9 gate).
 # Usage: bench.sh [--warm] [--sentence "日本語の文"] ...
 cd "$(dirname "$0")/.." || exit 1

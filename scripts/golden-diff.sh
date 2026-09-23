@@ -1,5 +1,5 @@
 #!/bin/bash
-# golden-diff.sh — diff current romanize* behavior against the baseline snapshot.
+# golden-diff.sh - diff current romanize* behavior against the baseline snapshot.
 # Exit 0 = byte-identical to baseline (parity contract). Non-zero = drift.
 # Usage: golden-diff.sh
 cd "$(dirname "$0")/.." || exit 1
@@ -13,7 +13,7 @@ trap 'rm -f "$CUR"' EXIT INT TERM
 ./scripts/golden-snapshot.sh --out "$CUR" >/dev/null 2>&1
 
 if [ ! -f "$BASE" ]; then
-  echo "GOLDEN_DIFF_ERROR: no baseline at $BASE — run golden-snapshot.sh first"
+  echo "GOLDEN_DIFF_ERROR: no baseline at $BASE - run golden-snapshot.sh first"
   exit 2
 fi
 

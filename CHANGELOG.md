@@ -76,7 +76,7 @@
 - Serving cores: `scripts/build-image.sh` presets `lite` (kana+senses,
   ~168MB compressed core) and `full` (all 9 tables); `scripts/serve-core.sh`
   serves stdin→JSON lookups with zero DB.
-- Table gating: partial loads are correct — `memdict-call` serves from RAM
+- Table gating: partial loads are correct - `memdict-call` serves from RAM
   only when all tables a lookup needs are in `*loaded-tables*`, else falls
   back to DB; sense and conjugation trios gate as units.
 - Verify gate: every `memdict-load` ends with `MEMDICT-VERIFY-OK <table>
