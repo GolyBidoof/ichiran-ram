@@ -424,10 +424,14 @@
         (let ((n (getf plist :n))
               (major (getf plist :major)))
           (cond ((equal name "conjugation")
+                 ;; by-seq groups MAJOR (sorted by seq); by-from must group
+                 ;; MAJOR-FROM (sorted by "from"). Grouping by "from" over the
+                 ;; seq-ordered permutation gives non-contiguous, wrong ranges.
                  (setf (getf plist :by-seq)
                        (group-ranges major n (lambda (r) (aref (getf plist :seqs) r)) n)
                        (getf plist :by-from)
-                       (group-ranges major n (lambda (r) (aref (getf plist :froms) r)) n)))
+                       (group-ranges (getf plist :major-from) n
+                                     (lambda (r) (aref (getf plist :froms) r)) n)))
                 ((member name '("conj_prop" "conj_source_reading") :test #'equal)
                  (setf (getf plist :by-conj)
                        (group-ranges major n

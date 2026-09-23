@@ -54,15 +54,32 @@
         (let ((s (uiop:getenv "NUMBER_OF_PROCESSORS")))
           (when s (parse-integer s :junk-allowed t))))))
 
+(defun performance-core-count ()
+  "Count of performance cores, or NIL where the OS does not distinguish.
+   macOS exposes hw.perflevel0.logicalcpu; Linux generally does not, and its
+   cores are homogeneous, so NIL there is fine."
+  (ignore-errors
+    (let ((out (uiop:run-program '("sysctl" "-n" "hw.perflevel0.logicalcpu")
+                                 :output :string :ignore-error-status t)))
+      (let ((n (parse-integer (string-trim '(#\Space #\Newline) out)
+                              :junk-allowed t)))
+        (and n (plusp n) n)))))
+
 (defun worker-count ()
-  "Workers to use: WORKERS env var, else one less than the CPU count (so a
-   core is left for the reader/writer thread), never less than 1."
+  "Workers to use: WORKERS env var if set, else the performance-core count,
+   else one less than the logical CPU count.
+   Measured on a 10P+4E machine (140 the visual novel dialogue lines, best of 2):
+   8 workers 7.59x, 10 workers 7.82x, 11 workers 6.93x, 13 workers 6.63x,
+   14 workers 5.66x. Past the P-core count the extra work lands on
+   efficiency cores, which are far slower, so throughput FALLS — using
+   cpu-count-1 as the default (13 here) was 15% slower than the optimum."
   (or *workers*
       (setf *workers*
-            (let ((env (uiop:getenv "WORKERS")))
-              (max 1 (or (and env (parse-integer env :junk-allowed t))
-                         (let ((cpus (cpu-count)))
-                           (if cpus (max 1 (1- cpus)) 4))))))))
+            (max 1 (or (let ((env (uiop:getenv "WORKERS")))
+                         (and env (parse-integer env :junk-allowed t)))
+                       (performance-core-count)
+                       (let ((cpus (cpu-count)))
+                         (if cpus (max 1 (1- cpus)) 4)))))))
 
 (defun romanize-safe (text)
   "Romanize TEXT, or an ERROR: line — never signals, so one bad sentence

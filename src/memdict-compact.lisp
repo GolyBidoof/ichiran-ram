@@ -1194,8 +1194,7 @@
   "Rows of TABLE-NAME with TEXT = WORD whose seq appears as conj.seq for a
    conjugation row whose \"from\" is in FROMS. Mirrors find-word-conj-of's
    second query (the table/conjugation join)."
-  (when (and (memdict-tables-loaded-p table-name "conjugation")
-             (memdict-table-loaded-p "kana_text"))
+  (when (memdict-tables-loaded-p table-name "conjugation")
     (let ((seqs (loop for f in froms append (memdict-conj-seqs-from f))))
       (when seqs
         (loop for row in (memdict-text-rows-by-text table-name word)
