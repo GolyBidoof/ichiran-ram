@@ -197,7 +197,7 @@
                                :words (list word1 word2)
                                :score-mod score-mod :score-base score-base))
 
-;; ---- R5: compact-entry analyzer shims (root-p, n-kanji, ...) ----
+;; ---- compact-entry analyzer shims (root-p, n-kanji, ...) ----
 ;; calc-score calls (root-p entry), (n-kanji entry), (primary-nokanji entry)
 ;; on the entry object; route those generics to the compact struct slots.
 
@@ -214,7 +214,7 @@
 (defmethod ichiran/dict::content ((obj compact-entry))
   (compact-entry-content obj))
 
-;; ---- R5: compact-sense-prop shims (uk path uses sense-id) ----
+;; ---- compact-sense-prop shims (uk path uses sense-id) ----
 (defmethod ichiran/dict::sense-id ((obj compact-sense-prop))
   (compact-sense-prop-sense-id obj))
 (defmethod ichiran/dict::text ((obj compact-sense-prop))
@@ -222,7 +222,7 @@
 (defmethod ichiran/dict::seq ((obj compact-sense-prop))
   (compact-sense-prop-seq obj))
 
-;; ---- R5: compact-conj-prop analyzer shims ----
+;; ---- compact-conj-prop analyzer shims ----
 (defmethod ichiran/dict::id ((obj compact-conj-prop))
   (compact-conj-prop-id obj))
 (defmethod ichiran/dict::conj-id ((obj compact-conj-prop))

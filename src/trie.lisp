@@ -5,7 +5,7 @@
 ;;;; from each start position and only extend while the prefix still matches
 ;;;; dictionary entries. Linear in matched-prefix depth.
 ;;;;
-;;;; R3 COMPACT ENCODING (why the old one fatals at full-dict scale):
+;;;; COMPACT ENCODING (why the old one fatals at full-dict scale):
 ;;;; The old trie-node used an SBCL hash-table per node (char -> child). Each
 ;;;; hash-table carries ~4KB of fixed allocation regardless of size, and the
 ;;;; full dictionary has millions of distinct prefixes - that alone is tens of
