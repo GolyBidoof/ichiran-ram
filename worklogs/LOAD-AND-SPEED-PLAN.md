@@ -191,6 +191,60 @@ it removes allocation on the path that the bandwidth analysis above says is
 the limiter, and because a predicate is the honest construct for a boolean
 test — but it is not a headline number.
 
+## A warm process, so measurement is cheap (scripts/warm.sh)
+
+Every measurement used to pay the full Quicklisp compile plus the snapshot
+load (~10s) before doing any work, and a single experiment often needed
+several corpus passes, so an iteration cost minutes. `scripts/warm.sh` keeps
+one process warm and evaluates forms in it:
+
+    scripts/warm.sh start                        # boot once, ~15s
+    scripts/warm.sh send '(bench)'
+    scripts/warm.sh send '(ichiran:romanize "食べる")'
+    scripts/warm.sh stop
+
+Requests go over a FIFO and results come back numbered, so `send` can wait for
+its own answer. A full benchmark (140 the visual novel lines, serial plus 10 workers, two
+reps each) returns in about **7-8 seconds** instead of about five minutes.
+`warm-server.lisp` defines `bench`, `bench-consed` and `vn-work`.
+
+A side benefit that matters for the methodology above: once a source file is
+loaded into the warm image, an A/B can be run **inside one process**, which
+removes process-level drift entirely. Crossing processes is what forced the
+interleaved protocol in the first place.
+
+## An intermittent nondeterminism in segmentation (found, deliberately NOT fixed)
+
+`golden-diff.sh` drifted on 2 of about 6 runs with byte-identical code, then
+passed 4 times in a row. The difference was always golden line 1: either
+`してる` (treated as the compound して+いる, score 110) or `し` (a conjugation
+of する, score 10).
+
+Cause: `get-suffix-map` calls `init-suffixes`, which populates the suffix
+cache **in a background thread and returns immediately**, and then reads
+`*suffix-cache*` without waiting. When the builder has not finished, the
+reader sees a partly populated cache and suffix parsing changes. Verified by
+holding the builder's lock for 2s in a background thread: `get-suffix-map`
+returned instantly, then waited 2.68s once a blocking wait was added.
+
+The uncomfortable part: with the wait in place the output became
+deterministic **and different from the recorded baseline on that line** — all
+three runs drifted identically. The baseline in `data/` was itself captured
+while the race was live, so it encodes one of the two outcomes.
+
+I did not keep the fix. Making it deterministic changes analyzer output for at
+least one corpus line, and the stated contract for this work is that
+`golden-diff` stays byte-identical; silently editing the baseline to match new
+output would hide exactly the kind of behaviour change the contract exists to
+catch. This needs a decision rather than a quiet commit:
+
+- keeping it means accepting a deliberate output change and regenerating the
+  baseline, and confirming `してる` vs `し` is the better parse;
+- not keeping it means the shipped server can romanize the same input two
+  different ways depending on thread timing.
+
+Not caused by this work: the pre-change code drifted the same way.
+
 ## Measurement methodology (this bit matters)
 
 Single-run sequential A/B on this machine has **~10% run-to-run drift**: the

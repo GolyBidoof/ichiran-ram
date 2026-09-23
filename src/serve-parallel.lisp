@@ -100,7 +100,9 @@
       (let ((fn (and (fboundp (intern "MEMDICT-ORD-0-SENSE-IDS" pkg))
                      (symbol-function (intern "MEMDICT-ORD-0-SENSE-IDS" pkg)))))
         (when fn (ignore-errors (funcall fn))))))
-  ;; Exercise the analyzer paths once so lazy memo tables are populated.
+  ;; Exercise the analyzer paths once so lazy memo tables are populated. This
+  ;; also runs the suffix cache to completion in the main thread, so workers
+  ;; inherit a finished cache instead of each racing to build their own.
   (dolist (probe '("日本語" "たべる" "がっこう" "読みます"))
     (ignore-errors (ichiran:romanize probe)))
   t)
