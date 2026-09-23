@@ -151,7 +151,16 @@
   ;; Exercise the analyzer paths once so lazy memo tables are populated. This
   ;; also runs the suffix cache to completion in the main thread, so workers
   ;; inherit a finished cache instead of each racing to build their own.
-  (dolist (probe '("日本語" "たべる" "がっこう" "読みます"))
+  ;; The probes below are chosen to trigger the expensive one-time paths, not
+  ;; just to touch the analyzer. 聖杯戦争。 is six characters and measured 354ms
+  ;; COLD against 1.678ms warm, a dense compound whose candidate lattice is the
+  ;; worst case in the corpus; the other two add a katakana run and a long
+  ;; comma-chained clause, the two shapes that dominate the warm tail. Paying
+  ;; them here moves that cost off whichever request happens to arrive first.
+  (dolist (probe '("日本語" "たべる" "がっこう" "読みます"
+                   "聖杯戦争。"
+                   "なにしろサーヴァントはいつマスターを裏切ってもおかしくない連中だ。"
+                   "この冬木の土地には聖杯が在るとされ、過去何人もの魔術師たちが技を競い合ったという。"))
     (ignore-errors (ichiran:romanize probe)))
   ;; Run the suffix cache to completion here so workers inherit a finished one
   ;; instead of racing its builder.
