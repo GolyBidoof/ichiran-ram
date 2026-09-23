@@ -35,7 +35,7 @@
 (defparameter *magic* "ICHSNAP1"
   "8-byte file magic.")
 
-(defparameter *version* 3)
+(defparameter *version* 4)
 
 (defparameter *elem-types*
   '((unsigned-byte 8) (unsigned-byte 32) (signed-byte 32) fixnum)
@@ -47,7 +47,8 @@
 ;;; ---- field layout per table -------------------------------------------
 
 (defparameter *text-table-slots*
-  '(n texts ids seqs ords ranks text-ids commons flags tags tag-ids kanjis kanji-ids
+  '(n texts text-offsets text-order ids seqs ords ranks text-ids commons flags
+    tags tag-ids kanjis kanji-ids
     kanas kana-ids text-major text-start text-count seq-major seq-start seq-count
     max-seq))
 
@@ -456,9 +457,8 @@
       (let ((plist nil))
         (loop for f in fields for v in values
               do (setf (getf plist (intern (string-upcase f) :keyword)) v))
-        ;; n is a slot; max-seq too. Rebuild text-index from the pool.
-        (let ((texts (getf plist :texts)))
-          (setf (getf plist :text-index) (rebuild-text-index texts)))
+        ;; n is a slot; max-seq too. There is no text-index to rebuild: TEXT-ORDER
+        ;; ships in the file and lookups binary search it.
         (apply (fdefinition (find-symbol "MAKE-INT-TEXT-TABLE" :ichiran/memdict-int))
                plist))
       (let ((plist nil))

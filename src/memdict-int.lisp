@@ -32,8 +32,15 @@
 
 (defstruct int-text-table
   (n 0 :type fixnum)
-  (texts #() :type simple-vector)
-  (text-index (make-hash-table :test 'equal))
+  ;; TEXTS is an ENCODED pool: one concatenated string. TEXT-OFFSETS holds its
+  ;; N+1 character offsets and TEXT-ORDER lists pool indices sorted by text, so
+  ;; a lookup is a binary search that reads straight out of the blob. It used to
+  ;; be a simple-vector with one Lisp string per entry plus an equal hash table;
+  ;; at 8.4M entries across the two text tables, building those strings was
+  ;; 2.9s of the snapshot decode and rebuilding the hash another 0.8s.
+  (texts "" :type string)
+  (text-offsets #() :type (simple-array (unsigned-byte 32) (*)))
+  (text-order #() :type (simple-array (unsigned-byte 32) (*)))
   (ids #() :type (simple-array (unsigned-byte 32) (*)))
   (seqs #() :type (simple-array (unsigned-byte 32) (*)))
   (ords #() :type (simple-array (unsigned-byte 32) (*)))
@@ -152,8 +159,7 @@
                                         (replace out v))))
                (freeze-vec (lambda (v) (let ((out (make-array (fill-pointer v))))
                                          (replace out v))))
-               (texts-vec (funcall freeze-vec texts))
-               (nt (length texts-vec))
+               (nt (length texts))
                (text-major (make-array n :element-type '(unsigned-byte 32)))
                (text-start (make-array nt :element-type '(unsigned-byte 32) :initial-element 0))
                (text-count (make-array nt :element-type '(unsigned-byte 32) :initial-element 0))
@@ -208,10 +214,17 @@
                        (when (zerop (aref seq-count sq))
                          (setf (aref seq-start sq) pos))
                        (incf (aref seq-count sq)))))
+          ;; Encode the pool and sort an index into it, which replaces both
+          ;; the per-entry strings and the equal hash table used to find them.
+          (multiple-value-bind (texts-blob text-off) (pool-encode texts)
+            (let ((text-order (make-array nt :element-type '(unsigned-byte 32))))
+              (loop for i from 0 below nt do (setf (aref text-order i) i))
+              (sort text-order (lambda (a b) (string< (aref texts a) (aref texts b))))
           (sb-ext:gc :full t)
           (let ((after (sb-kernel:dynamic-usage)))
             (values (make-int-text-table
-                     :n n :texts texts-vec :text-index text-index
+                     :n n :texts texts-blob :text-offsets text-off
+                     :text-order text-order
                      :ids (funcall freeze-u32 ids) :seqs (funcall freeze-u32 seqs)
                      :ords (funcall freeze-u32 ords) :ranks (funcall freeze-u32 ranks)
                      :text-ids (funcall freeze-u32 text-ids)
@@ -223,7 +236,7 @@
                      :text-major text-major :text-start text-start :text-count text-count
                      :seq-major seq-major :seq-start seq-start :seq-count seq-count
                      :max-seq max-seq)
-                    (- after before)))))))
+                    (- after before)))))))))
 
 (defun int-text-row-count (table)
   (int-text-table-n table))
@@ -237,7 +250,7 @@
             for row = (aref (int-text-table-seq-major table) k)
             when (= (aref (int-text-table-ords table) row) ord)
               do (let ((ti (aref (int-text-table-text-ids table) row)))
-                   (return (aref (int-text-table-texts table) ti)))))))
+                   (return (int-text-pool-string table ti)))))))
 
 (defun int-text-row-fields (table row)
   "The ten decoded text-row fields as multiple values, without consing a
@@ -245,8 +258,7 @@
    best-kanji best-kana. Callers build their struct directly from these."
   (values (aref (int-text-table-ids table) row)
           (aref (int-text-table-seqs table) row)
-          (aref (int-text-table-texts table)
-                (aref (int-text-table-text-ids table) row))
+          (int-text-pool-string table (aref (int-text-table-text-ids table) row))
           (aref (int-text-table-ords table) row)
           (let ((c (aref (int-text-table-commons table) row)))
             (if (= c -1) :null c))
@@ -261,9 +273,74 @@
                          (aref (int-text-table-kana-ids table) row))))
             (if (equal b "") nil b))))
 
+(defun pool-encode (vec)
+  "Encode VEC (a vector of strings) as (values BLOB OFFSETS): one concatenated
+   string plus N+1 character offsets, so a pool decodes as one big string and
+   one u32 vector instead of one Lisp string per entry."
+  (let* ((n (length vec))
+         (off (make-array (1+ n) :element-type '(unsigned-byte 32)))
+         (total (loop for i from 0 below n
+                      sum (length (aref vec i)) of-type fixnum))
+         (blob (make-string total))
+         (pos 0))
+    (loop for i from 0 below n
+          for str = (aref vec i)
+          do (setf (aref off i) pos)
+             (replace blob str :start1 pos)
+             (incf pos (length str)))
+    (setf (aref off n) pos)
+    (values blob off)))
+
+(defun pool-ref (blob off i)
+  "The I-th string of a pool encoded by POOL-ENCODE."
+  (subseq blob (aref off i) (aref off (1+ i))))
+
+(defun int-text-pool-string (table i)
+  "The I-th text of TABLE, materialised from its encoded pool."
+  (pool-ref (int-text-table-texts table)
+            (int-text-table-text-offsets table) i))
+
+(defun compare-pool-string (blob off i text)
+  "Compare pool entry I against TEXT, returning -1, 0 or 1. Reads the entry
+   straight out of BLOB, so a lookup allocates nothing to compare with."
+  (let* ((start (aref off i))
+         (end (aref off (1+ i)))
+         (len (- end start))
+         (tlen (length text))
+         (n (min len tlen)))
+    (dotimes (k n)
+      (let ((a (char blob (+ start k)))
+            (b (char text k)))
+        (unless (char= a b)
+          (return-from compare-pool-string (if (char< a b) -1 1)))))
+    (cond ((< len tlen) -1) ((> len tlen) 1) (t 0))))
+
+(defun int-text-pool-index-mv (table text)
+  "TEXT's pool index as (values INDEX FOUND), so call sites keep the
+   MULTIPLE-VALUE-BIND shape they had with the old equal hash table."
+  (let ((i (int-text-pool-index table text)))
+    (values i (and i t))))
+
+(defun int-text-pool-index (table text)
+  "Pool index for TEXT, or NIL. Binary search over TEXT-ORDER."
+  (let ((order (int-text-table-text-order table)))
+    (when (plusp (length order))
+      (let ((blob (int-text-table-texts table))
+            (off (int-text-table-text-offsets table))
+            (lo 0)
+            (hi (1- (length order))))
+        (loop while (<= lo hi)
+              for mid = (ash (+ lo hi) -1)
+              for pidx = (aref order mid)
+              for cmp = (compare-pool-string blob off pidx text)
+              do (cond ((zerop cmp) (return pidx))
+                       ((minusp cmp) (setf lo (1+ mid)))
+                       (t (setf hi (1- mid))))
+              finally (return nil))))))
+
 (defun int-text-find-rows-indexes (table text)
   "Row indexes for TEXT in id order. NIL if none."
-  (multiple-value-bind (ti found) (gethash text (int-text-table-text-index table))
+  (multiple-value-bind (ti found) (int-text-pool-index-mv table text)
     (when found
       (let ((start (aref (int-text-table-text-start table) ti))
             (count (aref (int-text-table-text-count table) ti)))
@@ -300,8 +377,7 @@
    best-kanji/best-kana string or NIL (:null in DB); SIDE tells which."
   (list :id (aref (int-text-table-ids table) row)
           :seq (aref (int-text-table-seqs table) row)
-          :text (aref (int-text-table-texts table)
-                      (aref (int-text-table-text-ids table) row))
+          :text (int-text-pool-string table (aref (int-text-table-text-ids table) row))
           :ord (aref (int-text-table-ords table) row)
           :common (let ((c (aref (int-text-table-commons table) row)))
                     (if (= c -1) :null c))
@@ -345,7 +421,7 @@
 
 (defun int-text-find-rows (table text)
   "List of decoded row plists for TEXT in id order. NIL if none."
-  (multiple-value-bind (ti found) (gethash text (int-text-table-text-index table))
+  (multiple-value-bind (ti found) (int-text-pool-index-mv table text)
     (when found
       (let ((start (aref (int-text-table-text-start table) ti))
             (count (aref (int-text-table-text-count table) ti)))
@@ -462,7 +538,7 @@
 (defun int-text-find (table text)
   "List of (id seq ord) for TEXT in id order (mirror of memdict-find shape
    for verification; serving returns richer rows later)."
-  (multiple-value-bind (ti found) (gethash text (int-text-table-text-index table))
+  (multiple-value-bind (ti found) (int-text-pool-index-mv table text)
     (when found
       (let ((start (aref (int-text-table-text-start table) ti))
             (count (aref (int-text-table-text-count table) ti)))
@@ -669,30 +745,6 @@
                           ;; hands the analyzer.
                           (if (logtest 1 fl) t (if (logtest 2 fl) :null nil))
                           (if (logtest 4 fl) t (if (logtest 8 fl) :null nil)))))))
-
-(defun pool-encode (vec)
-  "Encode VEC (a vector of strings) as (values BLOB OFFSETS): one concatenated
-   string plus N+1 character offsets. A pool then decodes as ONE big string and
-   ONE u32 vector, instead of allocating a Lisp string per entry. That is what
-   made conj_source_reading cost 2.79s of the 6.4s snapshot decode: 8.4M rows
-   over two pools, so millions of small string allocations."
-  (let* ((n (length vec))
-         (off (make-array (1+ n) :element-type '(unsigned-byte 32)))
-         (total (loop for i from 0 below n
-                      sum (length (aref vec i)) of-type fixnum))
-         (blob (make-string total))
-         (pos 0))
-    (loop for i from 0 below n
-          for str = (aref vec i)
-          do (setf (aref off i) pos)
-             (replace blob str :start1 pos)
-             (incf pos (length str)))
-    (setf (aref off n) pos)
-    (values blob off)))
-
-(defun pool-ref (blob off i)
-  "The I-th string of a pool encoded by POOL-ENCODE."
-  (subseq blob (aref off i) (aref off (1+ i))))
 
 (defun int-load-csr (&key (chunk 200000) conn)
   "Load conj_source_reading (id conj-id text source-text). ORDER BY id."
