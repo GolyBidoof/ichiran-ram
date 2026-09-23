@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Integer-keyed dictionary layer (`src/memdict-int.lisp`) covers `kana_text`,
+  `kanji_text`, `entry`, `conjugation`, `conj_prop` and
+  `conj_source_reading` as typed columns plus interned pools: 7.2GB for all
+  six, roughly half the compact hash cost for the text tables. Loaded through
+  `memdict-load-int`; row counts asserted against `SELECT count(*)`.
+- Whole dictionary now fits a 16GB machine at 8.1GB heap. Corpus wall time
+  18.85s -> 2.52s (51.8ms -> 6.9ms per line, 7.48x) with the integer layer
+  plus the compact sense layer; `PRESET=full-ram scripts/build-image.sh`.
+- Fixed two silent integer-backend bugs that only RAM-vs-DB comparison caught:
+  `int-conj-props-by-id` returned five fields where callers destructured six
+  (so conjugation-type filtering found nothing and te-iru compounds were
+  dropped), and the `compact-kanji` `get-kana` shim bypassed `best-kana-conj`
+  (so conjugated kanji kept their kanji text as the reading). Golden-corpus
+  primary-output mismatches vs the DB path: 37/364 -> 7/364, the remainder
+  being alternative-ordering ties. See worklogs/R7-REPORT.md.
 - Profiled page serving under lite RAM with sb-sprof: ~81% of wall time is
   Postgres socket I/O, Lisp hotspots under 2% each. Query-killing outranks
   all CPU work; see worklogs/R6-REPORT.md.

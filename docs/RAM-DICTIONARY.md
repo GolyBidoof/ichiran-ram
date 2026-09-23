@@ -53,14 +53,29 @@ quickloaded on top for full romanize):
 
 ```bash
 PRESET=lite ./scripts/build-image.sh --out local-env/ichiran-lite.core
+# whole dictionary in ~8GB (fits a 16GB machine):
+#                       PRESET=full-ram ./scripts/build-image.sh
 # kana-only:            ./scripts/build-image.sh
-# full 9-table (32GB+ host): PRESET=full ./scripts/build-image.sh
+# full 9-table compact (32GB+ host): PRESET=full ./scripts/build-image.sh
 # + baked trie:         TRIE_TABLES='"kana_text"' ./scripts/build-image.sh
 ```
 
 Presets: `lite` = kana_text+sense+gloss+sense_prop (~3.3GB dict, builds on a
-16GB Mac, covers ~60% of queries). `full` = all 9 tables (~12GB dict,
+16GB Mac, covers ~60% of queries). `full-ram` = the six integer tables plus
+the compact sense layer (8.1GB heap, whole dictionary, 7.5x the DB path on the
+golden corpus). `full` = all 9 tables through the compact loader (~12GB dict,
 needs a 32–64GB host to build and hold).
+
+To load the layers by hand instead of through a preset:
+
+```lisp
+(ichiran/memdict-compact:memdict-load-int
+ :chunk 200000
+ :tables '("kana_text" "kanji_text" "entry" "conjugation"
+           "conj_prop" "conj_source_reading"))
+(ichiran/memdict-compact:memdict-load
+ :chunk 100000 :tables '("sense" "gloss" "sense_prop"))
+```
 
 ## How it works
 
@@ -114,17 +129,23 @@ lets hot paths trust a RAM miss and skip the DB entirely when loaded.
 
 ## Load order and memory
 
-Measured rows and RAM (local full DB):
+Measured rows and RAM (local full DB). Two backends: the compact hash loader
+(`memdict-load`) and the integer backend (`memdict-load-int`,
+`src/memdict-int.lisp`), which stores typed columns plus interned pools and
+costs about half as much for the text tables.
 
-| Table | Rows | RAM |
-|---|---|---|
-| kana_text | 3,289,512 | 2.7 GB |
-| kanji_text | 5,435,705 | 4.3 GB |
-| entry | 2,512,557 | 0.6 GB |
-| conjugation | 2,343,276 | 0.3 GB |
-| conj_prop | 2,358,731 | 0.3 GB |
-| conj_source_reading | 8,386,607 | 3.9 GB |
-| sense+gloss+sense_prop | ~1.1M | ~0.6 GB |
+| Table | Rows | compact | integer |
+|---|---|---|---|
+| kana_text | 3,289,512 | 2.7 GB | 1.4 GB |
+| kanji_text | 5,435,707 | 4.3 GB | 2.3 GB |
+| entry | 2,512,557 | 0.6 GB | 0.5 GB |
+| conjugation | 2,343,276 | 0.3 GB | 0.04 GB |
+| conj_prop | 2,358,731 | 0.3 GB | 0.06 GB |
+| conj_source_reading | 8,386,607 | 3.9 GB | 2.8 GB |
+| sense+gloss+sense_prop | ~1.1M | ~0.6 GB | not yet integer-backed |
+
+Integer layer total: 7.2 GB for the six tables above. With the sense layer
+loaded from the compact backend the whole dictionary runs in 8.1 GB of heap.
 
 Impact-per-GB load order (measured, `worklogs/TABLE-BENCHMARK.md`):
 kana_text → kanji_text → **sense trio (−64% queries alone)** → entry →
@@ -162,6 +183,13 @@ sentence −52…−63%). Full page (19 paragraphs, 4.3K chars): 180,985 →
 89,335 queries (**−51%**), 19.8s → 10.3s (**−48%**) on localhost. Over a
 remote DB the query-count win matters more than local wall time. Details:
 `worklogs/TABLE-BENCHMARK.md`, `worklogs/R6-REPORT.md`.
+
+Full dictionary (integer layer + compact sense layer, 8.1GB heap), 364-line
+golden corpus, `ichiran:romanize` warm: DB path 18.85s → RAM 2.52s, i.e.
+51.8ms → 6.9ms per line (**7.48x**). Residual DB queries drop from 238.9 to
+17.1 per line. RAM-vs-DB primary-output agreement is 357/364; the 7
+differences are alternative-ordering ties, not missing readings. Details and
+the query-shape breakdown: `worklogs/R7-REPORT.md`.
 
 ## Troubleshooting
 

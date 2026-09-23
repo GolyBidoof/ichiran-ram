@@ -18,7 +18,9 @@
 #   TABLES='"kana_text"' scripts/build-image.sh   # kana-only (default)
 #   TABLES='"kana_text" "kanji_text"' scripts/build-image.sh  # full (needs 32GB+)
 #   PRESET=lite scripts/build-image.sh  # kana+senses trio (~3.3GB dict, builds on 16GB)
-#   PRESET=full scripts/build-image.sh  # all 9 tables (needs 32GB+ host)
+#   PRESET=full scripts/build-image.sh  # all 9 tables compact (needs 32GB+ host)
+#   PRESET=full-ram scripts/build-image.sh  # whole dict in ~8GB (integer layer
+#                                           # + compact sense layer)
 #   TRIE_TABLES='"kana_text"' scripts/build-image.sh  # + baked prefix trie
 # DB connection (env overrides, defaults shown):
 #   ICHIRAN_DB_NAME (default jmdict), ICHIRAN_DB_USER (default jmdict),
@@ -30,13 +32,20 @@ cd "$(dirname "$0")/.."
 OUT="local-env/ichiran-serving.core"
 if [ "$1" = "--out" ] && [ -n "$2" ]; then OUT="$2"
 elif [ -n "$1" ] && [ "${1#-}" = "$1" ]; then OUT="$1"; fi
-# PRESET overrides TABLES when set.
+# INT_TABLES are served by the memory-tight integer backend
+# (src/memdict-int.lisp); TABLES are served by the compact hash loader.
+# Splitting them this way is what makes the whole dictionary fit in ~8GB.
+# PRESET overrides both when set.
 case "${PRESET:-}" in
   lite) TABLES='"kana_text" "sense" "gloss" "sense_prop"' ;;
   kana) TABLES='"kana_text"' ;;
   full) TABLES='"kana_text" "kanji_text" "entry" "conjugation" "conj_prop" "conj_source_reading" "sense" "gloss" "sense_prop"' ;;
+  full-ram)
+    INT_TABLES='"kana_text" "kanji_text" "entry" "conjugation" "conj_prop" "conj_source_reading"'
+    TABLES='"sense" "gloss" "sense_prop"' ;;
 esac
 TABLES="${TABLES:-\"kana_text\"}"
+INT_TABLES="${INT_TABLES:-}"
 TRIE_TABLES="${TRIE_TABLES:-}"
 # SYSTEM=1: bake the full analyzer (:ichiran + shims, *memdict-p* on) into the
 # image too — a single file that romanizes with no quickload and no DB for
@@ -72,9 +81,19 @@ cat > "$BUILD_LISP" <<EOF
 (ql:quickload :postmodern :silent t)
 $SYSTEM_LISP
 (load "src/memdict-compact.lisp")
+(load "src/memdict-int.lisp")
 (load "src/trie.lisp")
 (in-package :cl-user)
-(format t "~%== building serving core: loading compact dict (bare)...~%")
+(format t "~%== building serving core: loading integer dict layer (bare)...~%")
+(when (plusp (length '$INT_TABLES))
+  (multiple-value-bind (bytes sizes)
+      (ichiran/memdict-compact:memdict-load-int
+       :conn '("$DB_NAME" "$DB_USER" "$DB_PASS" "$DB_HOST")
+       :chunk 200000
+       :tables (list $INT_TABLES))
+    (declare (ignore sizes))
+    (format t "integer layer: ~,1f MB~%" (/ bytes 1048576.0))))
+(format t "~%== loading compact dict layer (bare)...~%")
 (ichiran/memdict-compact:memdict-load :conn '("$DB_NAME" "$DB_USER" "$DB_PASS" "$DB_HOST")
                                       :chunk 100000
                                       :tables (list $TABLES))
@@ -102,6 +121,7 @@ echo "IMAGE_BUILD_DONE -> $OUT"
 {
   echo "out=$OUT"
   echo "tables=$TABLES"
+  echo "int_tables=${INT_TABLES:-none}"
   echo "trie_tables=${TRIE_TABLES:-none}"
   echo "preset=${PRESET:-custom}"
   echo "git_sha=$GIT_SHA"

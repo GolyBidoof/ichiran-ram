@@ -32,7 +32,8 @@
            #:compact-sense-prop-id #:compact-sense-prop-sense-id #:compact-sense-prop-seq
            ;; R7 integer backend registry
            #:int-register-text-table #:int-table-loaded-p #:*int-tables*
-           #:memdict-query-parents))
+           #:memdict-query-parents
+           #:memdict-load-int #:*int-backed-tables*))
 
 (in-package #:ichiran/memdict-compact)
 
@@ -854,3 +855,47 @@
                       (when (equal (getf row :text) csrc)
                         (push (list (getf row :id) cid) found)))))))))
         (nreverse found)))))
+
+;;; ---- R7: integer-backend bulk loader ----
+;;; Loads the memory-tight tables through src/memdict-int.lisp and registers
+;;; them, so the serving core can combine the integer layer (text/entry/conj)
+;;; with compact hash tables for whatever is not integer-backed yet
+;;; (the sense/gloss/sense_prop layer). Needs ichiran/memdict-int loaded.
+
+(defparameter *int-backed-tables*
+  '("kana_text" "kanji_text" "entry" "conjugation" "conj_prop"
+    "conj_source_reading")
+  "Tables the integer backend can serve, in load order.")
+
+(defun memdict-load-int (&key (tables *int-backed-tables*) (chunk 200000) conn
+                              (verbose t))
+  "Load TABLES via the integer backend and register them for lookups.
+   Returns (values total-bytes size-alist). Signals if a table has no
+   integer loader (so a typo can't silently load nothing)."
+  (let ((total 0) (sizes nil) (load-text (int-fn 'int-load-text))
+        ;; Resolve once: the integer loaders fall back to ichiran/conn, which a
+        ;; bare serving core does not have.
+        (conn (or conn (default-conn))))
+    (dolist (table tables)
+      (let ((start (get-internal-real-time)))
+        (multiple-value-bind (obj bytes)
+            (cond ((member table '("kana_text" "kanji_text") :test 'equal)
+                   (funcall load-text table :chunk chunk :conn conn))
+                  ((equal table "entry")
+                   (funcall (int-fn 'int-load-entry) :chunk chunk :conn conn))
+                  ((equal table "conjugation")
+                   (funcall (int-fn 'int-load-conjugation) :chunk chunk :conn conn))
+                  ((equal table "conj_prop")
+                   (funcall (int-fn 'int-load-conj-prop) :chunk chunk :conn conn))
+                  ((equal table "conj_source_reading")
+                   (funcall (int-fn 'int-load-csr) :chunk chunk :conn conn))
+                  (t (error "memdict-load-int: no integer loader for ~a" table)))
+          (int-register-text-table table obj)
+          (incf total bytes)
+          (push (cons table bytes) sizes)
+          (when verbose
+            (format t "int-loaded ~a: ~,1f MB in ~,1fs~%" table
+                    (/ bytes 1048576.0)
+                    (/ (- (get-internal-real-time) start)
+                       internal-time-units-per-second))))))
+    (values total (nreverse sizes))))
