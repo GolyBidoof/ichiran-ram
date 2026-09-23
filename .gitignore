@@ -2,8 +2,10 @@
 *~
 settings.lisp
 !docker/settings.lisp
-ichiran-cli
-ichiran-cli.exe
+# the built CLI binary at the repo root (scripts/ichiran-cli is a source file,
+# so this rule is anchored to the root on purpose)
+/ichiran-cli
+/ichiran-cli.exe
 docker/pgdata/
 # local perf env
 settings.lisp

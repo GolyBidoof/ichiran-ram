@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **The plain `ichiran-cli` command is now a dispatcher**, so the same command
+  with the same options works before and after setup: PostgreSQL while no RAM
+  dictionary exists, the baked core once one does. It reports the backend on
+  stderr, `ICHIRAN_BACKEND=db` or `=ram` forces either, and database-building
+  commands (`full-init`, `load-jmdict`, `add-errata`, `load-best-readings`)
+  answer with what to do instead rather than doing work the fork does not need.
+  In the container, `docker/ichiran-scripts/ichiran-cli` routes the installed
+  command through the same dispatcher.
+- `.dockerignore` now excludes `local-env/`, `*.core`, `*.snap` and the built
+  `ichiran-cli`. Before this, the whole of `local-env/` went into the image
+  build context as `COPY ./`, so snapshots, cores, quicklisp and any corpora kept
+  out of version control would have shipped inside a built or pushed image.
+- `ram-setup.sh` finds the docker database host by itself, trying the `pg`
+  service when `localhost` is not reachable, and exports the resolved connection
+  to the build steps.
 - **`scripts/ram-setup.sh`: one command from a database to a zero-database
   server.** It checks SBCL, quicklisp and the database, writes the snapshots,
   bakes a serving core, and then romanizes a sentence from the core with

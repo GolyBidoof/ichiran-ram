@@ -1,1 +1,13 @@
 docker/pgdata/**/*
+
+# local-env holds everything this machine produces rather than the repo:
+# the RAM snapshots and serving cores (gigabytes), the workspace quicklisp
+# install, scratch logs, and any corpora kept out of version control. None of it
+# belongs in an image, and the corpora in particular must never ship in one.
+local-env/
+local-env/**/*
+
+# build artifacts
+*.core
+*.snap
+ichiran-cli

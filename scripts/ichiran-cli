@@ -1,0 +1,91 @@
+#!/bin/bash
+# ichiran-cli - the ichiran command line. Same options as upstream, always.
+#
+# This is a dispatcher, so the command you already type keeps working while the
+# thing behind it changes:
+#
+#   before ram-setup.sh    PostgreSQL, exactly like ichiran
+#   after  ram-setup.sh    the baked core, no database at all
+#
+# Nothing about the options or the output changes. The only difference is where
+# the dictionary comes from, and one line on stderr saying which it used.
+#
+#   ./scripts/ichiran-cli -i "一覧は最高だぞ"
+#   ./scripts/ichiran-cli -f -l 5 "一覧は最高だぞ"
+#   ./scripts/ichiran-cli --serve < sentences.txt > results.jsonl
+#
+# Environment:
+#   ICHIRAN_BACKEND=auto|db|ram   force a backend (default auto)
+#   CORE=path                     use a specific core
+set -e
+cd "$(dirname "$0")/.." || exit 1
+
+CORE="${CORE:-${ICHIRAN_CORE:-local-env/ichiran-serving.core}}"
+BACKEND="${ICHIRAN_BACKEND:-auto}"
+
+note() { printf 'ichiran-cli: %s\n' "$*" >&2; }
+
+# The database-building entry points have no meaning once the dictionary is
+# baked: the snapshot is the dictionary. Say what to run instead of doing work
+# that the fork does not need.
+for arg in "$@"; do
+  case "$arg" in
+    *full-init*|*load-jmdict*|*load-best-readings*|*add-errata*|*load-suffixes*)
+      cat >&2 <<EOF
+ichiran-cli: that command builds the PostgreSQL dictionary, which is not needed here.
+  Set up RAM serving instead:   ./scripts/ram-setup.sh
+  Already did? Then you do not need this command at all. Serve text with:
+      ./scripts/serve-system.sh              # feed it lines, get results back
+      ./scripts/ram-cli.sh -i "text"         # or use this same CLI on the core
+EOF
+      exit 0 ;;
+  esac
+done
+
+run_on_db() {
+  # A built binary when there is one (this is what "ichiran-cli" normally means),
+  # otherwise straight from source, so a fresh clone works with no build step.
+  if [ -x ./ichiran-cli ]; then
+    exec ./ichiran-cli "$@"
+  fi
+  local args
+  args="$(mktemp /tmp/ichiran-cli-args.XXXXXXXX)" || exit 2
+  trap 'rm -f "$args"' EXIT INT TERM
+  printf '%s\n' "$@" > "$args"
+  exec scripts/sbcl-wrapped --non-interactive \
+    --eval '(ql:quickload :ichiran/cli :silent t)' \
+    --eval "(setf sb-ext:*posix-argv*
+                  (cons \"ichiran-cli\"
+                        (with-open-file (s \"$args\")
+                          (loop for line = (read-line s nil nil)
+                                while line collect line))))" \
+    --eval '(ichiran/cli::main)' \
+    --eval '(sb-ext:quit)'
+}
+
+run_on_db_with_notice() {
+  note "using PostgreSQL. This fork can answer the same way from RAM, with no database:"
+  note "  ./scripts/ram-setup.sh"
+  run_on_db "$@"
+}
+
+case "$BACKEND" in
+  ram)
+    exec scripts/ram-cli.sh "$@" ;;
+  db)
+    run_on_db_with_notice "$@" ;;
+  auto)
+    if [ -f "$CORE" ]; then
+      note "RAM dictionary ($CORE), no database"
+      exec scripts/ram-cli.sh "$@"
+    elif [ -f local-env/ichiran-int.snap ]; then
+      note "snapshot found but no core: using PostgreSQL for now."
+      note "  bake the core once with ./scripts/ram-setup.sh (adds it to the snapshot you already have)"
+      run_on_db "$@"
+    else
+      run_on_db_with_notice "$@"
+    fi ;;
+  *)
+    note "ICHIRAN_BACKEND must be auto, db or ram (got '$BACKEND')" >&2
+    exit 2 ;;
+esac

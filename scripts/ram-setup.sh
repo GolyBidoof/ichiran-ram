@@ -61,21 +61,36 @@ if ! scripts/sbcl-wrapped --non-interactive \
 fi
 say "  SBCL and quicklisp: ok"
 
+db_reachable() {
+  PGPASSWORD="$DB_PASS" PGCONNECT_TIMEOUT=5 psql -h "$1" -U "$DB_USER" \
+    -d "$DB_NAME" -tAc 'select 1' >/dev/null 2>&1
+}
+
 if [ "${SKIP_DB_CHECK:-}" != "1" ]; then
   if command -v psql >/dev/null 2>&1; then
-    if PGPASSWORD="$DB_PASS" PGCONNECT_TIMEOUT=5 psql -h "$DB_HOST" -U "$DB_USER" \
-         -d "$DB_NAME" -tAc 'select 1' >/dev/null 2>&1; then
+    if db_reachable "$DB_HOST"; then
       say "  database $DB_NAME on $DB_HOST: ok"
+    elif [ "$DB_HOST" = "localhost" ] && db_reachable pg; then
+      # Inside the docker compose setup the database is the "pg" service, not
+      # localhost, and nothing tells you that.
+      DB_HOST=pg
+      say "  database $DB_NAME on pg: ok (docker service name)"
     else
       die "cannot reach the database $DB_NAME on $DB_HOST as $DB_USER.
   The snapshot is built from it, so a live database is required for this step.
   Set ICHIRAN_DB_NAME, ICHIRAN_DB_USER, ICHIRAN_DB_PASSWORD and ICHIRAN_DB_HOST,
-  start PostgreSQL, or pass SKIP_DB_CHECK=1 to try anyway."
+  start PostgreSQL, or pass SKIP_DB_CHECK=1 to try anyway.
+  In the docker container the host is: ICHIRAN_DB_HOST=pg"
     fi
   else
     say "  psql not found, skipping the database check"
   fi
 fi
+
+# Hand the resolved connection to the build scripts, so a host found above (pg)
+# is the one they use too.
+export ICHIRAN_DB_NAME="$DB_NAME" ICHIRAN_DB_USER="$DB_USER"
+export ICHIRAN_DB_PASSWORD="$DB_PASS" ICHIRAN_DB_HOST="$DB_HOST"
 
 RAM_GB="$(total_ram_gb)"
 if [ "$PRESET" = "full-ram" ] && [ "$RAM_GB" != "0" ] && [ "$RAM_GB" -lt 14 ] 2>/dev/null; then
@@ -135,10 +150,13 @@ step "done"
 say "  core:     $CORE_OUT ($(LC_ALL=C du -h "$CORE_OUT" | cut -f1))"
 [ -f "$SNAP_OUT" ] && say "  snapshot: $SNAP_OUT ($(LC_ALL=C du -h "$SNAP_OUT" | cut -f1))"
 say ""
-say "  Serve it (one text per line on stdin, one result per line on stdout):"
+say "  The usual command now answers from the core, with no database:"
+say "    ./scripts/ichiran-cli -i \"一覧は最高だぞ\""
+say ""
+say "  Serve text (one line in, one result out, parallel, no database):"
 say "    ./scripts/serve-system.sh"
 say ""
-say "  Or use the CLI on it, exactly like ichiran-cli:"
+say "  The explicit forms, if you want them:"
 say "    ./scripts/ram-cli.sh -i \"一覧は最高だぞ\""
 say "    ./scripts/ram-cli.sh -f -l 5 \"一覧は最高だぞ\""
 say ""

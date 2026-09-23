@@ -133,13 +133,30 @@ credentials, so a silent fallback to PostgreSQL would fail the setup rather than
 pass quietly. Expect a few minutes. Running it again reuses what is already
 there and takes seconds, and `FORCE=1` rebuilds from scratch.
 
-Afterwards the normal commands pick all of it up on their own, with no flags, no
-environment variables, and no arguments:
+Afterwards the same commands you always used keep working, and quietly change
+where the dictionary comes from. No flags, no environment variables, no
+arguments:
 
 ```sh
+./scripts/ichiran-cli -i "一覧は最高だぞ"       # the CLI, now from the core
 ./scripts/serve-system.sh                     # one text per line, parallel, no DB
-./scripts/ram-cli.sh -i "一覧は最高だぞ"        # the CLI, on the baked dictionary
 ```
+
+The CLI prints which backend it chose on stderr, so you can always tell. Before
+the setup it says PostgreSQL, after it says the core, and `ICHIRAN_BACKEND=db`
+or `ICHIRAN_BACKEND=ram` forces either one.
+
+Inside the docker container, run the setup from the repo directory there:
+
+```sh
+docker exec -it ichiran-main-1 bash
+cd /root/quicklisp/local-projects/ichiran
+./scripts/ram-setup.sh
+```
+
+It finds the `pg` service on its own when `localhost` is not reachable, so no
+extra arguments are needed. After that,
+`docker exec -it ichiran-main-1 ichiran-cli -i "text"` runs from the core.
 
 If you would rather not bake a core at all, one earlier step gives you most of
 the win: `./scripts/build-snapshot.sh` writes the snapshots, and
@@ -182,13 +199,29 @@ process:
 ichiran-cli --serve < sentences.txt > results.jsonl
 ```
 
-**On the baked dictionary.** `scripts/ram-cli.sh` takes the same options as
-`ichiran-cli` and runs on the core from [Option C](#option-c-turn-on-the-fast-path),
-so the dictionary is already loaded and no database is involved:
+**One command, two backends.** `scripts/ichiran-cli` is a dispatcher that takes
+upstream's exact options. It uses PostgreSQL while no RAM dictionary exists, and
+the baked core once one does, and prints its choice on stderr:
 
 ```sh
-./scripts/ram-cli.sh -i "一覧は最高だぞ"        # romanization plus word info
-./scripts/ram-cli.sh -f -l 5 "一覧は最高だぞ"   # full split as JSON
+./scripts/ichiran-cli -i "一覧は最高だぞ"         # romanization plus word info
+./scripts/ichiran-cli -f -l 5 "一覧は最高だぞ"    # full split as JSON
+ICHIRAN_BACKEND=db  ./scripts/ichiran-cli "text"  # force the database
+ICHIRAN_BACKEND=ram ./scripts/ichiran-cli "text"  # force the core
+```
+
+`scripts/ram-cli.sh` is the same interface with the core required, for when you
+want that guarantee rather than a fallback. Commands that exist to build the
+PostgreSQL dictionary (`full-init`, `load-jmdict`, `add-errata` and friends)
+answer with what to do instead, because here the snapshot is the dictionary:
+
+```sh
+./scripts/ichiran-cli -e '(ichiran/maintenance:full-init)'
+# ichiran-cli: that command builds the PostgreSQL dictionary, which is not needed here.
+#   Set up RAM serving instead:   ./scripts/ram-setup.sh
+#   Already did? Then you do not need this command at all. Serve text with:
+#       ./scripts/serve-system.sh              # feed it lines, get results back
+#       ./scripts/ram-cli.sh -i "text"         # or use this same CLI on the core
 ```
 
 **Lisp API.** Unchanged. `ichiran:romanize`, `ichiran:romanize*`,
@@ -255,6 +288,7 @@ the fast path one step at a time, and stop wherever you like.
 | `(ql:quickload :ichiran)` | identical | none |
 | `ichiran-cli --serve` | new | added by this fork |
 | `(ql:quickload :ichiran/ram)` | new | added by this fork |
+| `./scripts/ichiran-cli -i "text"` | new path, same command | dispatcher: database before setup, core after it |
 | `./scripts/ram-setup.sh` | new | one command: snapshots plus a serving core |
 | `./scripts/ram-cli.sh -i "text"` | new | the CLI on the baked dictionary, no database |
 

@@ -1,0 +1,12 @@
+#!/bin/bash
+# ichiran-cli (in the container's PATH) - same command as before, but it goes
+# through the repo's dispatcher, so once a RAM core exists inside the container
+# this runs from RAM with no database.
+#
+# Build the core inside the container with:
+#   cd /root/quicklisp/local-projects/ichiran
+#   ICHIRAN_DB_HOST=pg ./scripts/ram-setup.sh
+#
+# The dispatcher falls back to the built binary and PostgreSQL when no core is
+# present, so this stays backward compatible either way.
+exec /root/quicklisp/local-projects/ichiran/scripts/ichiran-cli "$@"
