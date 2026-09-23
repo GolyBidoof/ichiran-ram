@@ -11,7 +11,7 @@ for corpus in $CORPORA; do
     if [ "$mode" = core ]; then
       /usr/bin/time -p env MODE=core CORPUS="$corpus" ./scripts/sbcl-wrapped \
         --core local-env/ichiran-serving.core --non-interactive \
-        --load /tmp/corebench.lisp --eval '(main)' --eval '(sb-ext:quit)' > "$out" 2>&1
+        --load scripts/bench-core.lisp --eval '(main)' --eval '(sb-ext:quit)' > "$out" 2>&1
     else
       /usr/bin/time -p env MODE="$mode" CORPUS="$corpus" ./scripts/sbcl-wrapped \
         --dynamic-space-size "$([ "$mode" = db ] && echo 4096 || echo 14336)" \

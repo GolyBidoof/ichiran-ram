@@ -41,7 +41,14 @@ if os.path.exists(core) and os.environ.get("WARM_NO_CORE") != "1":
 else:
     argv = ["./scripts/sbcl-wrapped", "--dynamic-space-size", "14336",
             "--non-interactive", "--load", "scripts/warm-server.lisp"]
+# The holder must not inherit stdout/stderr. It lives for ~27 hours, so if
+# stdout is a pipe (warm.sh start | tail, or any caller capturing output) the
+# pipe never reaches EOF and the caller blocks until the holder dies. That is
+# a hang, not a slow start: it happened with a pipe and never without one.
 holder = subprocess.Popen(["sh", "-c", "exec sleep 100000 > " + fifo],
+                          stdin=subprocess.DEVNULL,
+                          stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL,
                           start_new_session=True)
 open(holdf, "w").write(str(holder.pid))
 log = open(out, "ab")
