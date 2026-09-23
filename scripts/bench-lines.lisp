@@ -139,7 +139,7 @@
           do (let ((t1 (get-internal-real-time)))
                (ichiran/serve-parallel:romanize-safe (aref *plines* idx))
                (let* ((d (- (get-internal-real-time) t1))
-                      (k w)
+                      (k (sb-thread:thread-name sb-thread:*current-thread*))
                       (e (gethash k *pw*)))
                  (setf (aref *pseq* idx) d)
                  (setf (gethash k *pw*)
@@ -170,7 +170,7 @@
       (format t "PAR speedup=~,2fx efficiency=~,1f%~%"
               (/ (ms busy) (ms wall)) (* 100.0 (/ (ms busy) (ms wall) nw)))
       (maphash (lambda (k v) (push (list k (second v) (first v) (third v)) rows)) *pw*)
-      (setf rows (sort rows #'< :key #'first))
+      (setf rows (sort rows #'string< :key #'first))
       (dolist (r rows)
         (format t "PAR worker=~a lines=~a busy=~,1fms max-line=~,1fms~%"
                 (first r) (second r) (ms (third r)) (ms (fourth r))))
