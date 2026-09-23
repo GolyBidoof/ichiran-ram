@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **README and repository metadata reworked for discovery.** The top of the
+  README now leads with what the fork is and what it changes: about 40x per line,
+  0.28 SQL queries per line instead of 17.12, no database at runtime, 8.1GB of
+  heap for the whole dictionary, a 469MB core ready in about a second, and the
+  byte-identical guarantee stated where it is first read. It gains badges, a
+  "what this unlocks" section, and the numbers table extended with the query and
+  memory axes. The GitHub description was rewritten and the repository had no
+  topics at all; it now carries twenty. `docs/WHY-FORK.md` was rewritten to match
+  the current numbers and to say who the fork is for.
 - **The plain `ichiran-cli` command is now a dispatcher**, so the same command
   with the same options works before and after setup: PostgreSQL while no RAM
   dictionary exists, the baked core once one does. It reports the backend on

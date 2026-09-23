@@ -1,42 +1,73 @@
 # Ichiran RAM
 
-Ichiran reads Japanese text, splits it into words, and romanizes it, using the
-[JMdictDB](http://edrdg.org/~smg/) dictionary for meanings. This fork keeps the
-same analysis and the same commands, and adds an **in-RAM dictionary**, so the
-same answers can be served without PostgreSQL at all.
+**Japanese word segmentation and romanization, with the whole dictionary in RAM.**
+Same answers, same commands, about 40 times faster per line, and no database while
+it serves.
+
+[![Output](https://img.shields.io/badge/output-byte--identical-brightgreen)](#verification)
+[![Tests](https://img.shields.io/badge/tests-820%20assertions%2C%200%20failed-brightgreen)](#verification)
+[![Per line](https://img.shields.io/badge/per%20line-51.7ms%20to%201.27ms-brightgreen)](#the-numbers)
+[![Queries](https://img.shields.io/badge/SQL%20queries%20per%20line-17.12%20to%200.28-brightgreen)](#the-numbers)
+[![Database](https://img.shields.io/badge/database-not%20required-blue)](#option-c-turn-on-the-fast-path)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+Ichiran is a Japanese tokenizer, word segmenter and morphological analyzer that
+adds readings, romaji and dictionary glosses to Japanese text, powered by
+[JMdictDB](http://edrdg.org/~smg/). Upstream ichiran asks PostgreSQL for every
+word, reading and meaning while it analyzes a sentence, so a single sentence
+costs thousands of database queries and every one of them is on the critical
+path.
+
+This fork loads those same tables into RAM once and answers from memory. It can
+also bake the analyzer and the dictionary into one file that is ready in about a
+second and needs no database, no connection string and no server. The output is
+byte-identical to the database path, and three gates check that on every change.
 
 Upstream project: [tshatrov/ichiran](https://github.com/tshatrov/ichiran) by
 Timofei Shatrov. This fork is maintained by
 [GolyBidoof](https://github.com/GolyBidoof). Both are MIT licensed.
 
-## The short version
+## The numbers
 
-Upstream ichiran asks PostgreSQL for every word, reading, and meaning while it
-analyzes a sentence, which is thousands of queries per sentence. This fork can
-load those same tables into RAM once and answer from memory.
-
-| | PostgreSQL | RAM snapshot | Baked core |
+| | PostgreSQL (upstream) | RAM snapshot | Baked core |
 | --- | --- | --- | --- |
 | One line, warm (382-line corpus) | 51.7 ms | **1.27 ms** | **1.27 ms** |
+| One line, 10 worker threads (18,939 lines) | not measured | **0.121 ms** | 0.122 ms |
+| SQL queries per line | 17.12 | **0.28** | **none on the serving path** |
 | Whole corpus run, startup included | 88.5 s | 9.0 s | **3.3 s** |
 | Ready to answer, before any input | about 69 s | about 8.5 s | **about 1.3 s** |
-| One line, 10 worker threads (18,939 lines) | not measured | **0.121 ms** | 0.122 ms |
-| Database needed while serving | yes | **no** | **no** |
-| Answers | baseline | byte-identical | byte-identical |
+| Dictionary on disk | 4.7 GB database | 1.6 GB snapshot | **469 MB core** |
+| Memory held while serving | the database's own | 8.1 GB | 8.1 GB |
+| Output | baseline | byte-identical | byte-identical |
 
 Same machine, `romanize` per line, best of three runs. See
 [Verification](#verification) for how the equality is checked, and
 [docs/PERFORMANCE-HISTORY.md](docs/PERFORMANCE-HISTORY.md) for every measurement
 and for the ideas that were tried and rejected.
 
-**Nothing changes unless you ask for it.** Every fast path sits behind a flag
-that defaults to off. With the flags off, every lookup goes to PostgreSQL and the
-output matches the recorded baseline, which `scripts/golden-diff.sh` checks. If
-you just want ichiran, you can use this fork exactly as you use upstream, and
-skip the rest of this file.
+**If you already use ichiran, nothing changes but the speed.** The command, the
+flags, the Lisp API and the output stay exactly the same. Every fast path sits
+behind a flag that defaults to off, so with the flags off every lookup goes to
+PostgreSQL and the output matches the recorded baseline.
+
+## What this unlocks
+
+- **Batch work at a new scale.** 18,939 lines of Japanese took about 16 minutes
+  on the database path and 2.3 seconds with 10 threads, with no empty results.
+- **Nothing to run.** A baked core is one 469MB file: no PostgreSQL, no
+  connection strings, no migrations, no vacuuming, nothing to keep alive.
+- **One process, many lines.** A text per line in, one romanization per line out,
+  in order, with the dictionary already loaded.
+- **Laptops and offline machines.** The whole dictionary is 8.1GB of heap, which
+  a 16GB machine holds, and no network is involved.
+- **Japanese text for other tools.** Subtitle pipelines, OCR output, Anki card
+  mining, corpus analysis and preparing Japanese for language models, all of
+  which used to be dominated by dictionary round trips.
 
 ## Contents
 
+- [The numbers](#the-numbers)
+- [What this unlocks](#what-this-unlocks)
 - [Quick start](#quick-start)
   - [Option A: Docker, nothing to install](#option-a-docker-nothing-to-install)
   - [Option B: local SBCL and PostgreSQL](#option-b-local-sbcl-and-postgresql)

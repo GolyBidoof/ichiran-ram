@@ -1,34 +1,62 @@
-# Why This Fork Exists (docs/WHY-FORK.md)
+# Why this fork exists (docs/WHY-FORK.md)
 
-Upstream [ichiran](https://github.com/tshatrov/ichiran) answers every
-dictionary lookup from PostgreSQL at analyze time - thousands of queries per
-sentence, which dominates latency over any non-local DB link. This fork adds
-an **in-RAM serving path**: hot dictionary tables load once into compact
-indexed structs, and the analyzer's hot lookups are routed to RAM behind
-flags that default OFF.
+Upstream [ichiran](https://github.com/tshatrov/ichiran) answers every dictionary
+lookup from PostgreSQL while it analyzes text. A sentence asks the database for
+every candidate word, reading, conjugation and gloss, which is thousands of
+queries for one sentence, and all of them sit on the critical path. Over a
+non-local database link that dominates everything, and even on localhost it is
+the largest single cost in the analyzer.
 
-What is distinct here:
+This fork takes the database out of the serving path. The dictionary tables load
+once into compact indexed structures in RAM, the analyzer's hot lookups route to
+them behind flags that default to off, and the whole thing can be baked into one
+file that is ready to answer in about a second with no database at all.
 
-- **In-RAM dictionary** (`src/memdict-compact.lisp`, `src/trie.lisp`):
-  per-access-pattern indexes (by text, by seq, by sense-id, …), copy-on-return
-  so analyzer mutations never pollute the indexes, DB row order mirrored so
-  scoring tiebreaks usually agree.
-- **Serving cores**: `scripts/build-image.sh` dumps preloaded images
-  (`lite` = kana+senses for a laptop, `full` = all 9 tables for a big host);
-  `scripts/serve-core.sh` answers stdin→JSON lookups with zero DB.
-  Load with `(ql:quickload :ichiran/ram)` (see `#:ichiran/ram` in `ichiran.asd`).
-- **Measured wins**: −58% queries on the 8-sentence corpus, −51% queries /
-  −48% wall time on a full page (localhost); over a remote DB the
-  query-count win matters more. Details in `docs/RAM-DICTIONARY.md`.
-- **Flags-off parity philosophy**: with all flags off, code paths are
-  byte-identical to upstream. Every behavior change ships behind a
-  `*…-p*` special defaulting to `nil`, and `scripts/parity.sh` plus
-  `scripts/golden-diff.sh` must both stay green.
+## What that is worth
 
-Scope boundaries (what this fork does NOT do):
+| | PostgreSQL (upstream) | RAM snapshot | Baked core |
+| --- | --- | --- | --- |
+| One line, warm | 51.7 ms | 1.27 ms | 1.27 ms |
+| One line, 10 threads | not measured | 0.121 ms | 0.122 ms |
+| SQL queries per line | 17.12 | 0.28 | none on the serving path |
+| Ready before any input | about 69 s | about 8.5 s | about 1.3 s |
+| Memory held while serving | the database's own | 8.1 GB | 8.1 GB |
 
-- No scoring, split, hint, synergy/penalty, or errata changes.
-- No DB schema changes.
+The whole dictionary fits in 8.1GB of heap, on one 1.6GB snapshot or inside a
+469MB core, so a 16GB laptop can hold it and a container needs no database
+service at all. On 18,939 lines of magazine text the database path needs about 16
+minutes and the parallel RAM path takes 2.3 seconds.
 
-Note: `worklogs/` holds dev session notes (design, benchmarks, handover).
-It is excluded from any release tarball.
+## What is distinct here
+
+- **In-RAM dictionary** (`src/memdict-compact.lisp`, `src/memdict-int.lisp`):
+  per-access-pattern indexes, typed columns with interned pools for the six hot
+  tables, copy-on-return so analyzer mutations never pollute the indexes, and the
+  database's row order mirrored so scoring tiebreaks agree.
+- **Snapshots** (`src/int-snapshot.lisp`, `src/sense-snapshot.lisp`): the loaded
+  tables written as raw bytes, which turns a 72 second database load into 8.9
+  seconds and lets the sense layer come from disk instead of SQL.
+- **A baked core** (`scripts/build-image.sh`): the analyzer, the dictionary and
+  the filled caches in one image, ready in about 1.3 seconds and serving with no
+  database.
+- **Parallel serving** (`src/serve-parallel.lisp`): one worker per core, output
+  in input order, 10.9x to 12.8x on the machines measured.
+- **Verification first** (`scripts/parity.sh`, `scripts/golden-diff.sh`,
+  `scripts/ram-parity.sh`): the output is byte-identical to the database path,
+  and the gates were built before the speed work rather than after it.
+
+## Scope boundaries (what this fork does not do)
+
+- No scoring, split, hint, synergy, penalty or errata changes.
+- No database schema changes.
+- With every flag off, the analyzer runs on PostgreSQL exactly as upstream does.
+
+## For whom
+
+Anyone who has to run ichiran over a lot of text, in a container, on a machine
+with no database, or behind a latency budget: subtitle and OCR pipelines, corpus
+and vocabulary analysis, card mining, and preparing Japanese text for other
+tools.
+
+`worklogs/` holds the development session notes, including every benchmark and
+the ideas that were tried and rejected.
