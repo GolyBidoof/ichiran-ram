@@ -18,11 +18,17 @@
     (setf work (vn-lines))
     (let ((t1 (now)))
       (ichiran/conn:with-db nil
+        (let ((snap-t 0) (sense-t 0))
         (when (string-equal mode "ram")
-          (ichiran/memdict-compact:memdict-load-int :snapshot "local-env/ichiran-int.snap")
-          (ichiran/memdict-compact:memdict-load :chunk 200000
-                                                :tables '("sense" "gloss" "sense_prop"))
+          (let ((s0 (now)))
+            (ichiran/memdict-compact:memdict-load-int :snapshot "local-env/ichiran-int.snap")
+            (setf snap-t (- (now) s0)))
+          (let ((s1 (now)))
+            (ichiran/memdict-compact:memdict-load :chunk 200000
+                                                  :tables '("sense" "gloss" "sense_prop"))
+            (setf sense-t (- (now) s1)))
           (setf ichiran/dict::*memdict-p* t))
+        (format t "~&SPLIT snapshot=~,2fs sense-layer-from-sql=~,2fs~%" snap-t sense-t)
         (let ((dict-t (- (now) t1)))
           (let* ((cold (run-once work)) (best nil) (runs nil))
             (dotimes (i 3)
@@ -30,5 +36,5 @@
             (format t "~&RESULT mode=~a lines=~a chars=~a sys=~,2fs dict=~,2fs cold-first=~,3fs best=~,3fs per-line=~,2fms~%"
                     mode (length work) (reduce #'+ work :key #'length)
                     *t-sys* dict-t cold best (/ (* 1000 best) (length work)))
-            (format t "  runs=~{~,3f~^ ~}~%" (reverse runs))))))
+            (format t "  runs=~{~,3f~^ ~}~%" (reverse runs)))))))
     (finish-output) (sb-ext:quit)))

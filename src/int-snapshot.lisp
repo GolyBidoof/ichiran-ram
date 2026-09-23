@@ -392,7 +392,13 @@
              (unless (= endian 1)
                (error "int-snapshot: foreign-endian snapshot")))
            (let* ((ntables (source-u32 src))
-                  (out nil))
+                  (out nil)
+                  ;; Split the two costs, because they need opposite fixes:
+                  ;; a read-bound load wants mmap, an index-rebuild-bound load
+                  ;; wants the derived indexes serialized instead of rebuilt.
+                  (read-t 0)
+                  (rec-t 0)
+                  (t0 (get-internal-real-time)))
              (dotimes (i ntables)
                (let* ((name (read-string* src))
                       (nfields (source-u32 src))
@@ -402,7 +408,17 @@
                    (push (read-string* src) fields)
                    (push (read-value src) values))
                  (setf fields (nreverse fields) values (nreverse values))
-                 (push (cons name (reconstruct name fields values)) out)))
+                 (let ((a (get-internal-real-time)))
+                   (incf read-t (- a t0))
+                   (push (cons name (reconstruct name fields values)) out)
+                   (let ((b (get-internal-real-time)))
+                     (incf rec-t (- b a))
+                     (setf t0 b)))))
+             (format *trace-output*
+                     "~&SNAPSHOT-PHASES decode=~,2fs rebuild-indexes=~,2fs~%"
+                     (/ read-t internal-time-units-per-second)
+                     (/ rec-t internal-time-units-per-second))
+             (finish-output *trace-output*)
              (nreverse out)))
       (sb-posix:close fd))))
 
