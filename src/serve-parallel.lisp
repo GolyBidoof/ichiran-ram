@@ -190,7 +190,13 @@
          (ichiran/kanji::*reading-cache*
            (copy-memo-table ichiran/kanji::*reading-cache*))
          (ichiran/dict::*memdict-fn-cache*
-           (copy-memo-table ichiran/dict::*memdict-fn-cache*)))
+           (copy-memo-table ichiran/dict::*memdict-fn-cache*))
+         ;; A FRESH table, not a copy: this is a per-worker score cache whose
+         ;; whole value is accumulating across the batch. It is entered once
+         ;; per worker for the worker's lifetime, so it stays warm from the
+         ;; first dozen sentences onward and needs no lock.
+         (ichiran/dict::*gen-score-cache*
+           (make-hash-table :test 'eql :size 8192)))
      ;; NOTE: cl-ppcre in this tree exposes no scanner cache at all, so there
      ;; is no shared scanner table to protect. Caching scanners was tried
      ;; anyway and LOST: see worklogs/LOAD-AND-SPEED-PLAN.md ("allocation share

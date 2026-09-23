@@ -1280,10 +1280,105 @@
                                                          :info info :text text :use-length use-length :score-mod score-mod)))
       (values score info))))
 
+(defvar *gen-score-cache* nil
+  "Persistent per-worker mapping from a packed word identity to a score.
+
+   Bound by SERVE-PARALLEL:WITH-WORKER-STATE, which each worker enters once for
+   its whole batch, so the table is private to a thread, needs no lock, and
+   survives across lines. That last part is the point: the repetition being
+   exploited is mostly BETWEEN lines, since a word like は recurs constantly in
+   a text but rarely twice inside one sentence. A per-line table measured 3.7%,
+   which is why the first attempt at this was reverted.")
+
+(defvar *gen-score-hits* 0)
+(defvar *gen-score-misses* 0)
+(defvar *gen-score-bypass* 0)
+
+(declaim (inline %pack-score-key))
+(defun %pack-score-key (type-id row-id final-p)
+  "Pack (TYPE-ID, ROW-ID, FINAL-P) into one fixnum so the cache can use
+   :TEST EQL and build no key object at all. ROW-ID needs 24 bits, which covers
+   the 3.3M row KANA_TEXT with room to spare."
+  (declare (type (unsigned-byte 3) type-id)
+           (type (unsigned-byte 24) row-id)
+           (optimize (speed 3) (safety 0)))
+  (the fixnum (logior (ash row-id 5)
+                      (ash type-id 1)
+                      (if final-p 1 0))))
+
+(defun %score-word-identity (word)
+  "The row identity of WORD as (TYPE-ID . ROW-ID), or NIL.
+
+   Object identity is useless here: over the F/SN prologue CALC-SCORE scored
+   16,773 candidates built from 16,768 distinct reading objects, a 0.0%
+   identity repeat, because every lookup builds a fresh struct. The row id is
+   unique and present on 98.9% of calls. Compound and proxy readings are left
+   uncached, their id not being clearly per-computation.
+
+   The compact row types are named by strings because dict.lisp is compiled
+   before ichiran/memdict-compact exists, so a package-qualified literal would
+   be a read error here."
+  (when (find-package :ichiran/memdict-compact)
+    (let ((kana (find-symbol "COMPACT-KANA" :ichiran/memdict-compact))
+          (kanji (find-symbol "COMPACT-KANJI" :ichiran/memdict-compact))
+          (kana-id (find-symbol "COMPACT-KANA-ID" :ichiran/memdict-compact))
+          (kanji-id (find-symbol "COMPACT-KANJI-ID" :ichiran/memdict-compact)))
+      (cond ((and kana kana-id (typep word kana) (fboundp kana-id))
+             (cons 1 (funcall kana-id word)))
+            ((and kanji kanji-id (typep word kanji) (fboundp kanji-id))
+             (cons 2 (funcall kanji-id word)))
+            (t nil)))))
+
+(defun %cacheable-gen-score-key (word final kanji-break)
+  "The packed cache key for scoring WORD with FINAL, or NIL to bypass.
+
+   KANJI-BREAK is canonicalised to the word's own span to decide cacheability.
+   Offsets outside the word cannot change whether the word matches its internal
+   kanji/kana pattern, and over the F/SN prologue all 726 non-nil kanji-breaks
+   prune to NIL, so this is what lets the same word at different sentence
+   positions share one key. A word that genuinely has an internal break is
+   bypassed rather than given a canonical key.
+
+   The canonical form is used ONLY for this decision. CALC-SCORE still receives
+   the original KANJI-BREAK when the call is cached, so the cached value is
+   exactly the value that was computed without the cache."
+  ;; Any kanji-break at all bypasses the cache. Canonicalising it to the word's
+  ;; span looked safe and was tempting, because all 726 non-nil kanji-breaks
+  ;; over the F/SN prologue prune to NIL, but sharing a key between a call with
+  ;; a trailing break and one with none CHANGED THE OUTPUT: the two do not
+  ;; score identically, so the break reaches a penalty after all. Parity is
+  ;; worth far more than the 4.4% of calls this declines to cache.
+  (when kanji-break
+    (return-from %cacheable-gen-score-key nil))
+  (let ((ident (%score-word-identity word)))
+    (when (and ident (< (cdr ident) (ash 1 24)))
+      (%pack-score-key (car ident) (cdr ident) final))))
+
 (defun gen-score (segment &key final kanji-break)
-  (setf (values (segment-score segment) (segment-info segment))
-        (calc-score (segment-word segment) :final final :kanji-break kanji-break))
-  segment)
+  "Score SEGMENT, reusing the score when the same row was scored before.
+
+   The cached INFO is always a copy, in both directions: SEGMENT-INFO is handed
+   to callers that may modify it, so the cached plist and the returned plist
+   must not share structure with each other or with the segment."
+  (let* ((word (segment-word segment))
+         (cache *gen-score-cache*)
+         (key (and cache (%cacheable-gen-score-key word final kanji-break)))
+         (hit (and key (gethash key cache))))
+    (cond
+      (hit
+       (incf *gen-score-hits*)
+       (setf (segment-score segment) (car hit)
+             (segment-info segment) (copy-list (cdr hit)))
+       segment)
+      (t
+       (if key (incf *gen-score-misses*) (incf *gen-score-bypass*))
+       (setf (values (segment-score segment) (segment-info segment))
+             (calc-score word :final final :kanji-break kanji-break))
+       (when key
+         (setf (gethash key cache)
+               (cons (segment-score segment)
+                     (copy-list (segment-info segment)))))
+       segment))))
 
 (defun find-sticky-positions (str)
   "words cannot start or end after sokuon and before yoon characters"
