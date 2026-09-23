@@ -10,7 +10,7 @@
     (loop for line = (read-line in nil nil)
           while line
           for text = (string-trim (list #\Space #\Tab #\Newline (code-char 12288)) line)
-          unless (zerop (length text)) collect text)))
+          unless (or (zerop (length text)) (char= (char text 0) #\#)) collect text)))
 (defun run-once (work)
   (let ((t0 (now))) (dolist (l work) (ichiran:romanize l)) (- (now) t0)))
 (defun main ()
