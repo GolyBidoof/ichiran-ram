@@ -25,7 +25,8 @@
 (defpackage #:ichiran/serve-parallel
   (:use #:cl)
   (:export #:serve-stream #:map-lines-parallel #:worker-count #:warm-caches
-           #:romanize-safe #:probe-db #:*db-available*))
+           #:romanize-safe #:probe-db #:*db-available*
+           #:load-dictionary #:*dict-baked*))
 
 (in-package #:ichiran/serve-parallel)
 

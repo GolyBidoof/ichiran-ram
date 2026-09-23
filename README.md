@@ -150,3 +150,25 @@ running hot dictionary lookups from RAM (all flags default OFF, so default
 behavior is unchanged), per-table memory/query tradeoffs, building `lite`
 and full serving cores, and the verification gates (`parity.sh`,
 `golden-diff.sh`, per-load `MEMDICT-VERIFY-OK` row counts).
+
+Reading from RAM is 11 to 15 times faster than reading through PostgreSQL, and
+a baked core starts in about a second and needs no database at all:
+
+| corpus | database | RAM snapshot | baked core |
+| --- | --- | --- | --- |
+| 382-line corpus | 20.15s | 1.52s | 1.50s |
+| 39-line paragraph | 2.23s | 0.20s | 0.21s |
+| 84-line paragraph | 6.09s | 0.55s | 0.50s |
+| time to first answer | 4.13-22.4s | 0.6-2.1s | 1.25s |
+
+```sh
+scripts/build-snapshot.sh                          # integer + sense layer
+PRESET=full-ram SYSTEM=1 scripts/build-image.sh    # bake a serving core
+scripts/warm.sh start                              # uses the core if present
+./scripts/bench-all.sh                             # reproduce the table
+```
+
+`worklogs/PERF-RESULTS.md` has the full numbers, the sizes (3717 MB database,
+1670 MB of snapshots, 466 MB core, 2786 MB live heap) and the before/after of
+every startup phase. The gates are unchanged and all green: `GOLDEN_DIFF_OK`,
+`RAM_PARITY_OK`, `PARITY_OK`.
