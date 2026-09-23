@@ -1,13 +1,13 @@
 #!/bin/bash
 # serve-system.sh - persistent full-romanize server on the system core.
 #
-# The system core (local-env/ichiran-system-lite.core, built with SYSTEM=1)
-# holds the analyzer + dict in RAM. This keeps ONE warm process serving
-# stdin->romanize lines with no per-request startup (~2s boot once, then ms
-# per sentence) and zero DB for covered paths.
+# The core (built by scripts/ram-setup.sh, default local-env/ichiran-serving.core)
+# holds the analyzer and the whole dictionary in RAM. This keeps ONE warm process
+# serving stdin->romanize lines with no per-request startup (about a second to
+# boot, then about a millisecond per line) and no database at all.
 #
 # Usage:
-#   ./scripts/serve-system.sh                       # interactive
+#   ./scripts/serve-system.sh                       # interactive, no arguments
 #   echo "こんにちは" | ./scripts/serve-system.sh
 #   ./scripts/serve-system.sh < corpus.txt > out.txt
 #   CORE=local-env/other.core ./scripts/serve-system.sh
@@ -23,10 +23,17 @@
 # ERROR: ...).
 set -e
 cd "$(dirname "$0")/.." || exit 1
-CORE="${CORE:-local-env/ichiran-system-lite.core}"
+# Pick up whatever core is present, preferring the full one that ram-setup.sh
+# builds, so that after a setup run this script needs no arguments at all.
+if [ -z "${CORE:-}" ]; then
+  for candidate in local-env/ichiran-serving.core local-env/ichiran-system-lite.core; do
+    if [ -f "$candidate" ]; then CORE="$candidate"; break; fi
+  done
+fi
 
-if [ ! -f "$CORE" ]; then
-  echo "serve-system.sh: no core at $CORE - run SYSTEM=1 PRESET=lite scripts/build-image.sh --out $CORE first" >&2
+if [ -z "${CORE:-}" ] || [ ! -f "$CORE" ]; then
+  echo "serve-system.sh: no core found in local-env/." >&2
+  echo "  build one with: ./scripts/ram-setup.sh" >&2
   exit 2
 fi
 

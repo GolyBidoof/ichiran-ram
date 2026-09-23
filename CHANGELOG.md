@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **`scripts/ram-setup.sh`: one command from a database to a zero-database
+  server.** It checks SBCL, quicklisp and the database, writes the snapshots,
+  bakes a serving core, and then romanizes a sentence from the core with
+  deliberately wrong database credentials so a silent fallback to PostgreSQL
+  fails the setup instead of passing quietly. Re-running reuses existing
+  artifacts; `FORCE=1` rebuilds, `PRESET=lite` builds the smaller dictionary,
+  and `SKIP_SNAPSHOT=1` / `SKIP_CORE=1` / `SKIP_DB_CHECK=1` skip stages.
+- **`scripts/ram-cli.sh`: the ichiran CLI on the baked core.** Same options as
+  `ichiran-cli` (`-i`, `-f`, `-l`, `-e`), no dictionary load, no database. It
+  loads `:ichiran/cli` on top of the core and passes the arguments through a
+  file, so shell quoting never has to survive a trip through Lisp.
+- `scripts/serve-system.sh` now finds the core by itself, preferring
+  `local-env/ichiran-serving.core` (the one `ram-setup.sh` builds) and falling
+  back to `local-env/ichiran-system-lite.core`, so it needs no `CORE=` after a
+  setup run.
 - **The benchmark corpora are no longer in this repository**, in the working
   tree or in any commit. They were third-party text and could not be
   distributed, so all references are anonymized: line counts, character counts

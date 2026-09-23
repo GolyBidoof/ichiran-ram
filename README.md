@@ -118,41 +118,43 @@ falls back to `~/quicklisp`.
 
 ### Option C: turn on the fast path
 
-This is the reason the fork exists. You need a working database first, because
-the snapshot is built from it once. After that, no database is needed.
+This is the reason the fork exists. One command builds everything, and it needs
+a working database once, because that is where the dictionary comes from.
 
 ```sh
-# 1. Write the dictionary to disk once (a few minutes, and it needs the DB).
-./scripts/build-snapshot.sh
-#    local-env/ichiran-int.snap      1.7GB, the six core tables
-#    local-env/ichiran-sense.snap     27MB, meanings and glosses
-
-# 2. Serve from it. ~8.5s to boot, then ~1.3ms per line, zero queries.
-./scripts/serve-snapshot.sh
+./scripts/ram-setup.sh
 ```
 
-If you would rather not wait ~8.5s at boot, bake a core. The core is a saved
-Lisp image with the analyzer and the whole dictionary already inside it, so it
-starts in about 1.3 seconds and never touches the database.
+Wait for it to finish. It checks SBCL, quicklisp and your database, writes the
+dictionary snapshots (`local-env/ichiran-int.snap`, 1.6GB, plus the senses),
+bakes a serving core (`local-env/ichiran-serving.core`, 469MB), and then proves
+the result works by romanizing a sentence with deliberately wrong database
+credentials, so a silent fallback to PostgreSQL would fail the setup rather than
+pass quietly. Expect a few minutes. Running it again reuses what is already
+there and takes seconds, and `FORCE=1` rebuilds from scratch.
+
+Afterwards the normal commands pick all of it up on their own, with no flags, no
+environment variables, and no arguments:
 
 ```sh
-# 3. Bake a core (needs about 8GB of RAM free, one time).
-PRESET=full-ram SYSTEM=1 ./scripts/build-image.sh
-#    local-env/ichiran-serving.core  ~492MB
-
-# 4. Serve from the core, with 10 worker threads, zero database.
-CORE=local-env/ichiran-serving.core ./scripts/serve-system.sh
+./scripts/serve-system.sh                     # one text per line, parallel, no DB
+./scripts/ram-cli.sh -i "一覧は最高だぞ"        # the CLI, on the baked dictionary
 ```
 
-Both servers read one text per line on stdin and write one result per line on
+If you would rather not bake a core at all, one earlier step gives you most of
+the win: `./scripts/build-snapshot.sh` writes the snapshots, and
+`./scripts/serve-snapshot.sh` serves from them. That boots in about 8.5 seconds
+instead of about 1.3, and has the same per-line speed.
+
+The servers read one text per line on stdin and write one result per line on
 stdout, in the same order:
 
 ```sh
-echo "一覧は最高だぞ" | CORE=local-env/ichiran-serving.core ./scripts/serve-system.sh
-printf '日本語のテキスト\nもう一行\n' | ./scripts/serve-snapshot.sh
-./scripts/serve-snapshot.sh < mytext.txt > romaji.txt
-SERIAL=1 ./scripts/serve-snapshot.sh     # single thread, for debugging
-WORKERS=4 CORE=... ./scripts/serve-system.sh
+echo "一覧は最高だぞ" | ./scripts/serve-system.sh
+./scripts/serve-system.sh < mytext.txt > romaji.txt
+SERIAL=1 ./scripts/serve-system.sh     # single thread, for debugging
+WORKERS=4 ./scripts/serve-system.sh    # default is one worker per core
+./scripts/serve-snapshot.sh            # the snapshot path, same protocol
 ```
 
 The server prints a line containing `{"ready":true}` when it is warm. Ignore
@@ -178,6 +180,15 @@ process:
 
 ```sh
 ichiran-cli --serve < sentences.txt > results.jsonl
+```
+
+**On the baked dictionary.** `scripts/ram-cli.sh` takes the same options as
+`ichiran-cli` and runs on the core from [Option C](#option-c-turn-on-the-fast-path),
+so the dictionary is already loaded and no database is involved:
+
+```sh
+./scripts/ram-cli.sh -i "一覧は最高だぞ"        # romanization plus word info
+./scripts/ram-cli.sh -f -l 5 "一覧は最高だぞ"   # full split as JSON
 ```
 
 **Lisp API.** Unchanged. `ichiran:romanize`, `ichiran:romanize*`,
@@ -244,20 +255,21 @@ the fast path one step at a time, and stop wherever you like.
 | `(ql:quickload :ichiran)` | identical | none |
 | `ichiran-cli --serve` | new | added by this fork |
 | `(ql:quickload :ichiran/ram)` | new | added by this fork |
+| `./scripts/ram-setup.sh` | new | one command: snapshots plus a serving core |
+| `./scripts/ram-cli.sh -i "text"` | new | the CLI on the baked dictionary, no database |
 
 Suggested order:
 
 1. **Install as usual.** Point your existing setup at this checkout. Your tests
    and your output should be unchanged, because they are.
 2. **Check the baseline.** `./scripts/parity.sh` should print `PARITY_OK`.
-3. **Build the snapshot.** `./scripts/build-snapshot.sh`. This only reads from
-   your database and writes two files into `local-env/`, which git ignores.
-4. **Serve from RAM.** `./scripts/serve-snapshot.sh`. Compare its output with
-   your database path yourself if you want, or run `./scripts/ram-parity.sh`,
-   which does exactly that comparison over the whole golden corpus.
-5. **Bake a core if you want the fast boot.** `PRESET=full-ram SYSTEM=1
-   ./scripts/build-image.sh`, then `CORE=local-env/ichiran-serving.core
-   ./scripts/serve-system.sh`.
+3. **Build and serve from RAM.** `./scripts/ram-setup.sh` writes the snapshots
+   and a serving core into `local-env/`, which git ignores, and then proves the
+   result works. It reads your database, once. Afterwards
+   `./scripts/serve-system.sh` needs no arguments and no database.
+4. **Compare, if you want the proof.** `./scripts/ram-parity.sh` runs the whole
+   golden corpus through the RAM path and compares it byte for byte with the
+   database baseline.
 
 To roll back, stop loading `:ichiran/ram`, delete the files in `local-env/`, and
 unset the flags. The database, the schema, and the upstream source files keep
@@ -301,16 +313,16 @@ against a fixed baseline file instead of running the database twice.
 | RAM snapshot | 10GB RAM | 16GB |
 | Baked full core | 16GB RAM | 24GB |
 | Disk, dictionary | 4.7GB | 5GB |
-| Disk, snapshot | 1.7GB | |
-| Disk, core | 492MB | |
+| Disk, snapshot | 1.6GB | |
+| Disk, core | 469MB | |
 
 Serving from RAM holds about 8.1GB of dictionary in the heap, so 16GB is the
 practical floor for the full dictionary. `save-lisp-and-die` needs roughly twice
 the dictionary size while writing a core, which is why baking wants headroom.
 
-Build times on the reference machine (Apple Silicon, 16GB): a few minutes for
-the snapshot and a few minutes for a core, and neither needs to be repeated
-unless the dictionary or the table layout changes.
+Build times on the reference machine (Apple Silicon): a few minutes for the
+snapshot and a few minutes for a core, and neither needs to be repeated unless
+the dictionary or the table layout changes.
 
 The throughput benchmarks in the history document were taken on large samples of
 third-party Japanese text. Those files are not distributed with this repository
