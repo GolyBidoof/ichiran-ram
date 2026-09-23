@@ -40,7 +40,9 @@ Two changes, both committed:
    syscalls per pool entry meant ~20M syscalls, and an 8MB userspace buffer
    took the write from 50.3s to 4.2s.
 
-Rebuild with `scripts/build-snapshot.sh`.
+Rebuild with `scripts/build-snapshot.sh`. `scripts/serve-snapshot.sh` boots
+a full-dictionary server straight from the snapshot (no saved core, so no
+32GB host needed) and then serves stdin to stdout through the worker pool.
 
 ### Where the remaining ~9s goes
 

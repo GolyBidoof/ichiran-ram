@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **`scripts/serve-snapshot.sh`**: full-dictionary serving on a 16GB machine
+  without a baked core. `serve-system.sh` needs a saved core and baking the
+  full dictionary into one needs a 32GB+ host, so nothing on this machine
+  could serve the complete RAM dictionary; this boots it from the snapshot
+  instead (7.6s measured for the integer layer, versus ~70s from PostgreSQL)
+  and then serves stdin to stdout with the parallel worker pool. The compact
+  sense layer still comes from PostgreSQL at startup (~1s), so a database is
+  required to boot even though the serving path itself issues no queries.
+  The parallel path announces readiness exactly once, via `serve-stream`.
 - **Serving path now issues 0.28 queries per line** (was 17.12): every
   remaining per-candidate query has a RAM mirror, and a RAM miss is trusted
   when the table's row count matched the DB at load (`int-register-text-table`
