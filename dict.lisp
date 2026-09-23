@@ -1624,14 +1624,21 @@
        for number-group-end = (cdr (assoc start number-groups))
        unless (member start sticky)
        nconcing
-       (let ((end-list (if (trie-enabled-p)
-                           ;; S4: only probe ends that are valid dictionary prefixes
-                           (mapcar #'car (trie-call 'trie-prefix-matches
-                                                    *ichiran-trie* str start
-                                                    :max-len *max-word-length*))
-                           (loop for e from (1+ start)
-                                 upto (min (length str) (+ start *max-word-length*))
-                                 collect e))))
+       (let* ((trie (and (trie-enabled-p)
+                         ;; Same fallback the RAM seeder uses. A core builds its
+                         ;; trie through MEMDICT-BUILD-TRIE, which stores it in
+                         ;; the memdict package, so reading *ICHIRAN-TRIE* alone
+                         ;; left this NIL while TRIE-ENABLED-P said yes and
+                         ;; TRIE-PREFIX-MATCHES was called on NIL.
+                         (or *ichiran-trie* (memdict-call 'memdict-trie))))
+              (end-list (if trie
+                            ;; S4: only probe ends that are valid dictionary prefixes
+                            (mapcar #'car (trie-call 'trie-prefix-matches
+                                                     trie str start
+                                                     :max-len *max-word-length*))
+                            (loop for e from (1+ start)
+                                  upto (min (length str) (+ start *max-word-length*))
+                                  collect e))))
          (loop for end in end-list
               unless (member end sticky)
               nconcing
@@ -2545,7 +2552,7 @@
   (word-info-reading-str word-info))
 
 (defun word-info-str (word-info)
-  (with-connection *connection*
+  (with-dict-connection
     (with-output-to-string (s)
       (labels ((inner (word-info &optional suffix marker)
                  (when marker (princ " * " s))
@@ -2634,7 +2641,7 @@
           (inner word-info)))))
 
 (defun get-kanji-words (char)
-  (with-connection *connection*
+  (with-dict-connection
     (let* ((str (if (typep char 'character) (make-string 1 :initial-element char) char)))
       (query (:select 'e.seq 'k.text 'r.text 'k.common
                       :from (:as 'entry 'e) (:as 'kanji-text 'k) (:as 'kana-text 'r)
@@ -2646,10 +2653,16 @@
                                    (:like 'k.text (:|| "%" str "%"))))))))
 
 (defun exists-reading (seq reading)
-  (query (:select 'seq :from 'kana-text :where (:and (:= 'seq seq) (:= 'text reading)))))
+  ;; RAM when the text table is resident: the query only asks whether the
+  ;; (seq, text) pair exists, which is a scan of that text's rows. It was a bare
+  ;; QUERY with no gate, so it opened a connection on the serving path.
+  (if (memdict-table-loaded-p "kana_text")
+      (some (lambda (row) (= (seq row) seq))
+            (memdict-call 'memdict-text-rows-by-text "kana_text" reading))
+      (query (:select 'seq :from 'kana-text :where (:and (:= 'seq seq) (:= 'text reading))))))
 
 (defun find-word-info (text &key reading root-only &aux (end (length text)))
-  (with-connection *connection*
+  (with-dict-connection
     (let* ((*suffix-map-temp* (get-suffix-map text))
            (*suffix-next-end* end)
            (all-words (if root-only
@@ -2680,7 +2693,7 @@
                :key (lambda (r) (and (not (eql (common r) :null)) (common r)))))
 
 (defun find-kanji-for-pattern (pattern)
-  (with-connection *connection*
+  (with-dict-connection
     (loop for r in (find-word-kana-pattern pattern)
        for k = (get-kanji r)
        when k collect k into kanji
@@ -2720,7 +2733,7 @@
                :column))))
 
 (defun match-glosses (text reading words &key (normalize 'identity) update-gloss)
-  (with-connection *connection*
+  (with-dict-connection
     (let ((candidates (get-candidates text reading))
           (nwords (mapcar normalize words)))
       (when candidates

@@ -69,7 +69,28 @@ if [ -n "$SYSTEM" ]; then
   # dictionary directly rather than through LOAD-DICTIONARY. Leaving it out
   # produced a core that served uncached, which the runtime masked by
   # initialising on first use but at the cost of first-request latency.
-  SYSTEM_TAIL='(load "src/memdict-compact-shims.lisp") (load "src/serve-parallel.lisp") (setf ichiran/dict::*memdict-p* t) (setf ichiran/serve-parallel::*dict-baked* t) (ichiran/dict::gloss-json-cache-init)'
+  # WARM-CACHES is not just a warm-up: it is what makes a baked core
+  # database-free. The :is-arch cache is built by SQL, CALC-SCORE consults
+  # it for every candidate through IS-ARCH, and nothing else ever
+  # populates it. Without this a baked core needed a live PostgreSQL for
+  # every score computation, and because DICT-SEGMENT is compiled with
+  # (speed 3) the connecting caller was inlined away and the socket error
+  # appeared to come from DICT-SEGMENT itself. Warming here also bakes the
+  # suffix cache, so a core stops building that at runtime too. Both are
+  # computed while the database is available, which at build time it is.
+  # A trie is built below but nothing enabled it, so a core built with
+  # TRIE_TABLES set carried a prefix index that trie-enabled-p always
+  # rejected. Enable it only when a trie is actually being built.
+  # RESTRICTED_READINGS is fetched from PostgreSQL at build time and baked,
+  # so a core can serve restricted senses with no connection. The spec is
+  # assembled here because SYSTEM_TAIL is single-quoted and cannot
+  # interpolate the DB_* shell variables itself.
+  RESTRICTED_LISP=" (ichiran/serve-parallel::load-restricted-readings :conn '(\"$DB_NAME\" \"$DB_USER\" \"$DB_PASS\" \"$DB_HOST\"))"
+  TRIE_ENABLE=""
+  if [ -n "$TRIE_TABLES" ]; then
+    TRIE_ENABLE=' (setf ichiran/dict::*trie-p* t)'
+  fi
+  SYSTEM_TAIL='(load "src/memdict-compact-shims.lisp") (load "src/serve-parallel.lisp") (setf ichiran/dict::*memdict-p* t) (setf ichiran/serve-parallel::*dict-baked* t) (ichiran/dict::gloss-json-cache-init) (ichiran/serve-parallel:warm-caches) (ignore-errors (ichiran/conn::ensure :counters))'"$TRIE_ENABLE""$RESTRICTED_LISP"
 else
   SYSTEM_LISP='(format t "bare core (no analyzer baked in)~%")'
   SYSTEM_TAIL='(format t "no shims (bare core)~%")'

@@ -90,6 +90,36 @@
       (handler-case (ichiran:romanize text)
         (error (e) (format nil "ERROR: ~a" e)))))
 
+(defun load-restricted-readings (&key conn)
+  "Install RESTRICTED_READINGS into RAM from PostgreSQL.
+
+   It is not one of the resident tables, so it has to be fetched explicitly. It
+   is 6,332 rows, nothing next to a 2.9s dictionary load, and it takes
+   MATCH-SENSE-RESTRICTIONS off the connection path while serving: measured over
+   the F/SN prologue that one function cost about 2.6 ms per line, a third of
+   core serving, because every call reached for a connection it did not need.
+
+   LOAD-DICTIONARY calls this, and so does the core build. A baked core never
+   calls LOAD-DICTIONARY, so without the build-time call the hash is empty,
+   RAM-RESTRICTED-READINGS-AVAILABLE-P is false, and every restricted sense falls
+   back to SQL: with PostgreSQL stopped, ROMANIZE failed on lines as ordinary as
+   ＊いただきます＊ with 'No database connection selected.'"
+  (handler-case
+      (let ((rows (if conn
+                      ;; The core build has no ambient connection: it passes an
+                      ;; explicit spec to MEMDICT-LOAD/LOAD-INT and only clears
+                      ;; the pool afterwards, so a bare QUERY here found no
+                      ;; database and the readings were silently never baked.
+                      (postmodern:with-connection conn
+                        (postmodern:query
+                         (:select 'seq 'reading 'text :from 'restricted-readings)))
+                      (postmodern:query
+                       (:select 'seq 'reading 'text :from 'restricted-readings)))))
+        (format t "~&restricted readings for ~a seqs~%"
+                (ichiran/memdict-compact:memdict-set-restricted-readings rows)))
+    (error (e)
+      (format t "~&restricted readings unavailable: ~a~%" e))))
+
 (defun load-dictionary (&key (int-snapshot "local-env/ichiran-int.snap")
                              (sense-snapshot "local-env/ichiran-sense.snap"))
   "Load the whole dictionary into this image, preferring snapshots to SQL.
@@ -109,19 +139,7 @@
           (format t "~&load-dictionary: sense layer from PostgreSQL~%")
           (ichiran/memdict-compact:memdict-load
            :chunk 200000 :tables '("sense" "gloss" "sense_prop"))))
-    ;; restricted_readings is not one of the resident tables, so fetch it once
-    ;; here. It is 6,332 rows, which is nothing next to a 2.9s dictionary load,
-    ;; and it takes MATCH-SENSE-RESTRICTIONS off the connection path while
-    ;; serving: measured over the F/SN prologue, that one function was costing
-    ;; about 2.6 ms per line, a third of core serving, because every call
-    ;; reached for a connection it did not need.
-    (handler-case
-        (let ((rows (postmodern:query
-                     (:select 'seq 'reading 'text :from 'restricted-readings))))
-          (format t "~&load-dictionary: restricted readings for ~a seqs~%"
-                  (ichiran/memdict-compact:memdict-set-restricted-readings rows)))
-      (error (e)
-        (format t "~&load-dictionary: restricted readings unavailable: ~a~%" e)))
+    (load-restricted-readings)
     (setf ichiran/dict::*memdict-p* t)
     ;; Size the flat gloss JSON caches from the dictionary just loaded, before
     ;; the warm pass, so the warm pass also fills them.

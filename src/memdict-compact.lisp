@@ -939,6 +939,25 @@
 (defvar *trie* nil "Baked prefix trie over the loaded text keys (or NIL).")
 (defun memdict-trie () *trie*)
 
+(defun memdict-text-keys (table)
+  "The distinct text keys of TABLE, from whichever backend is loaded.
+
+   The compact loader keeps *KANA-BY-TEXT*/*KANJI-BY-TEXT*; the integer backend
+   keeps an encoded pool with a parallel offsets array, which is why a trie
+   built by MAPHASH over the hashes came out empty in a full-ram core."
+  (let ((hash (cond ((equal table "kana_text")
+                     (and (boundp '*kana-by-text*) *kana-by-text*))
+                    ((equal table "kanji_text")
+                     (and (boundp '*kanji-by-text*) *kanji-by-text*)))))
+    (if hash
+        (loop for k being the hash-keys of hash collect k)
+        (let ((tbl (gethash table *int-tables*)))
+          (when tbl
+            (let ((nfn (int-fn 'int-text-table-n))
+                  (sfn (int-fn 'int-text-pool-string)))
+              (loop for i below (funcall nfn tbl)
+                    collect (funcall sfn tbl i))))))))
+
 (defun memdict-build-trie (&key (tables '("kana_text" "kanji_text")))
   "Build the compact trie over the RAM text keys of TABLES and store it in
    *TRIE*. Requires src/trie.lisp loaded (bare-safe: postmodern+trie only).
@@ -947,18 +966,20 @@
     (unless trie-pkg
       (error "memdict-build-trie needs the ichiran/trie package (load src/trie.lisp first)"))
     (let ((pairs nil))
+      ;; Each side is collected from whichever backend is loaded. The compact
+      ;; loader fills *KANA-BY-TEXT*/*KANJI-BY-TEXT*; the integer columnar
+      ;; backend fills neither, keeping an encoded text pool instead. MAPHASH
+      ;; over those hashes therefore produced an EMPTY trie under full-ram, and
+      ;; the only symptom was the build reporting success in 0.1s and serving
+      ;; returning no candidates at all. MEMDICT-TEXT-KEYS handles both.
       (when (and (member "kana_text" tables :test 'equal)
                  (memdict-table-loaded-p "kana_text"))
-        (maphash (lambda (text rows)
-                   (declare (ignore rows))
-                   (push (cons text text) pairs))
-                 *kana-by-text*))
+        (dolist (text (memdict-text-keys "kana_text"))
+          (push (cons text text) pairs)))
       (when (and (member "kanji_text" tables :test 'equal)
                  (memdict-table-loaded-p "kanji_text"))
-        (maphash (lambda (text rows)
-                   (declare (ignore rows))
-                   (push (cons text text) pairs))
-                 *kanji-by-text*))
+        (dolist (text (memdict-text-keys "kanji_text"))
+          (push (cons text text) pairs)))
       (format t "memdict-build-trie: ~a texts...~%" (length pairs))
       (setf *trie* (funcall (symbol-function (find-symbol "BUILD-TRIE" trie-pkg)) pairs))
       (format t "memdict-build-trie: nodes=~a edges=~a~%"
