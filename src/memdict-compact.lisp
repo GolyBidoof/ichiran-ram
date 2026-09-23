@@ -38,7 +38,10 @@
            #:memdict-find-with-pos #:memdict-text-rows-by-text
            #:memdict-conj-ids-by-seq-from #:memdict-seq-has-pos-p
            #:memdict-text-row-by-id #:memdict-csr-texts
-           #:memdict-kana-forms #:memdict-conj-seqs-from))
+           #:memdict-kana-forms #:memdict-conj-seqs-from
+           #:memdict-any-sense-ord-0-p #:memdict-conj-count-by-seq-from
+           #:memdict-words-by-conj-from
+           #:memdict-complete-p #:memdict-mark-complete #:*complete-tables*))
 
 (in-package #:ichiran/memdict-compact)
 
@@ -167,6 +170,20 @@
           ((equal table "gloss") (sum-hash *gloss-by-sense*))
           ((equal table "sense_prop") (sum-hash *prop-by-sense*))
           (t nil))))
+
+(defvar *complete-tables* nil
+  "Tables whose row count was verified against the DB. A RAM miss on a
+   complete table is definitive, so find-word can skip the confirming DB probe
+   (see memdict-complete-p). Partial/failed loads are never listed here.")
+
+(defun memdict-complete-p (&rest tables)
+  "T when every table in TABLES was loaded AND verified complete."
+  (loop for table in tables always (member table *complete-tables* :test 'equal)))
+
+(defun memdict-mark-complete (tables)
+  (dolist (table tables)
+    (pushnew table *complete-tables* :test 'equal))
+  *complete-tables*)
 
 (defun memdict-verify-counts (tables get-db-count)
   "Compare in-RAM row totals against the DB for TABLES (fresh loads only —
@@ -298,10 +315,12 @@
     ;; Own connection scope: the loader's with-db-connection has closed by
     ;; now (and in bare-core builds there is no ambient connection at all).
     (with-db-connection (conn)
-      (memdict-verify-counts tables
-                             (lambda (table)
-                               (query (format nil "SELECT count(*) FROM ~a" table)
-                                      :single))))
+      (when (memdict-verify-counts tables
+                                   (lambda (table)
+                                     (query (format nil "SELECT count(*) FROM ~a" table)
+                                            :single)))
+        ;; all counts matched: RAM misses on these tables are definitive
+        (memdict-mark-complete tables)))
     (let ((after (sb-kernel:dynamic-usage)))
       (format t "memdict-compact load: ~,1f MB delta~%"
               (/ (- after before) 1048576.0)))
@@ -320,6 +339,8 @@
   (clrhash *conj-prop-by-id*) (clrhash *csr-by-id*)
   (clrhash *sense-by-seq*) (clrhash *gloss-by-sense*) (clrhash *prop-by-sense*)
   (clrhash *string-pool*) (clrhash *int-tables*)
+  (setf *sense-ids-ord-0* nil)
+  (setf *complete-tables* nil)
   (setf *loaded-tables* nil)
   t)
 
@@ -383,6 +404,22 @@
    memdict-table-loaded-p) treats the integer backend as loaded."
   (setf (gethash table *int-tables*) int-table)
   (pushnew table *loaded-tables* :test 'equal)
+  ;; Verify the row count here rather than in memdict-load-int: harnesses and
+  ;; the build script also register tables one by one, and a RAM miss is only
+  ;; trustworthy (memdict-complete-p) if the count matched the DB. Skipped
+  ;; silently in bare cores with no connection.
+  (handler-case
+      (with-db-connection (nil)
+        (let ((ram (int-object-row-count table int-table))
+              (db (query (format nil "SELECT count(*) FROM ~a" table) :single)))
+          (cond ((null ram) (format t "INT-VERIFY-SKIP: ~a~%" table))
+                ((= ram db)
+                 (memdict-mark-complete (list table))
+                 (format t "INT-VERIFY-OK: ~a ram=~a db=~a~%" table ram db))
+                (t (format t "INT-VERIFY-FAIL: ~a ram=~a db=~a~%" table ram db)))))
+    (error (e)
+      (declare (ignore e))
+      (format t "INT-VERIFY-SKIP: ~a (no connection)~%" table)))
   table)
 
 (defun int-fn (name)
@@ -878,6 +915,31 @@
     "conj_source_reading")
   "Tables the integer backend can serve, in load order.")
 
+(defun int-object-row-count (table obj)
+  "Row count of integer table object OBJ (which need not be registered yet)."
+  (cond ((member table '("kana_text" "kanji_text") :test 'equal)
+         (funcall (int-fn 'int-text-row-count) obj))
+        ((equal table "entry") (funcall (int-fn 'int-entry-row-count) obj))
+        ((equal table "conjugation") (funcall (int-fn 'int-conj-row-count) obj))
+        ((equal table "conj_prop") (funcall (int-fn 'int-conj-prop-row-count) obj))
+        ((equal table "conj_source_reading") (funcall (int-fn 'int-csr-row-count) obj))
+        (t nil)))
+
+(defun int-table-row-count (table)
+  "Row count of an integer table object, by name."
+  (cond ((member table '("kana_text" "kanji_text") :test 'equal)
+         (funcall (int-fn 'int-text-row-count)
+                  (gethash table *int-tables*)))
+        ((equal table "entry") (funcall (int-fn 'int-entry-row-count)
+                                        (gethash table *int-tables*)))
+        ((equal table "conjugation") (funcall (int-fn 'int-conj-row-count)
+                                              (gethash table *int-tables*)))
+        ((equal table "conj_prop") (funcall (int-fn 'int-conj-prop-row-count)
+                                            (gethash table *int-tables*)))
+        ((equal table "conj_source_reading") (funcall (int-fn 'int-csr-row-count)
+                                                      (gethash table *int-tables*)))
+        (t nil)))
+
 (defun memdict-load-int (&key (tables *int-backed-tables*) (chunk 200000) conn
                               (verbose t))
   "Load TABLES via the integer backend and register them for lookups.
@@ -909,6 +971,7 @@
                     (/ bytes 1048576.0)
                     (/ (- (get-internal-real-time) start)
                        internal-time-units-per-second))))))
+    ;; Row-count verification happens in int-register-text-table.
     (values total (nreverse sizes))))
 
 ;;; ---- R8/Tier 0: remaining serving-path query mirrors ----
@@ -1025,3 +1088,55 @@
         (dolist (other (memdict-conj-seqs-from seq))
           (add (memdict-rows-by-seq 'kana-text other))))
       (nreverse out))))
+
+;;; ---- R8/Tier 0.6: sense-ord probe, conj counts, remaining probes ----
+
+(defvar *sense-ids-ord-0* nil
+  "Hash set of sense ids whose ord is 0, built lazily from loaded senses.")
+
+(defun memdict-ord-0-sense-ids ()
+  "Hash set of sense ids with ord 0 (cached; cleared by memdict-reset)."
+  (or *sense-ids-ord-0*
+      (setf *sense-ids-ord-0*
+            (let ((h (make-hash-table :test 'eql)))
+              (maphash (lambda (seq senses)
+                         (declare (ignore seq))
+                         (dolist (s senses)
+                           (when (zerop (compact-sense-ord s))
+                             (setf (gethash (compact-sense-id s) h) t))))
+                       *sense-by-seq*)
+              h))))
+
+(defun memdict-any-sense-ord-0-p (sense-ids)
+  "T when any id in SENSE-IDS has ord 0. Mirrors the calc-score probe
+   (SELECT id FROM sense WHERE id IN (...) AND ord = 0) being non-empty."
+  (when (memdict-table-loaded-p "sense")
+    (let ((set (memdict-ord-0-sense-ids)))
+      (loop for id in sense-ids thereis (gethash id set)))))
+
+(defun memdict-conj-count-by-seq-from (seqs from)
+  "Number of conjugation rows with seq in SEQS and \"from\" = FROM."
+  (when (memdict-table-loaded-p "conjugation")
+    (let ((it (gethash "conjugation" *int-tables*))
+          (n 0))
+      (dolist (seq seqs)
+        (let ((rows (if it
+                        (funcall (int-fn 'int-conj-rows-by-seq) it seq)
+                        (loop for c in (gethash seq *conj-by-seq*)
+                              collect (list (compact-conj-id c) (compact-conj-seq c)
+                                            (compact-conj-from c) (compact-conj-via c))))))
+          (dolist (r rows)
+            (when (eql (third r) from) (incf n)))))
+      n)))
+
+(defun memdict-words-by-conj-from (table-name word froms)
+  "Rows of TABLE-NAME with TEXT = WORD whose seq appears as conj.seq for a
+   conjugation row whose \"from\" is in FROMS. Mirrors find-word-conj-of's
+   second query (the table/conjugation join)."
+  (when (and (memdict-tables-loaded-p table-name "conjugation")
+             (memdict-table-loaded-p "kana_text"))
+    (let ((seqs (loop for f in froms append (memdict-conj-seqs-from f))))
+      (when seqs
+        (loop for row in (memdict-text-rows-by-text table-name word)
+              when (member (md-row-seq row) seqs :test '=)
+                collect row)))))

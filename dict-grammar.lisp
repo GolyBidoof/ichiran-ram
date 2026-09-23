@@ -38,7 +38,9 @@
       (warn "No kana forms found for: ~a" seq)))
 
 (defun get-kana-form (seq text &key conj)
-  (let ((res (car (select-dao 'kana-text (:and (:= 'text text) (:= 'seq seq))))))
+  (let ((res (if (memdict-table-loaded-p "kana_text")
+                 (car (memdict-call 'memdict-find-by-seq-text 'kana-text seq text))
+                 (car (select-dao 'kana-text (:and (:= 'text text) (:= 'seq seq)))))))
     (when (and res conj)
       (setf (word-conjugations res) conj))
     res))
@@ -88,11 +90,15 @@
 (defun find-word-conj-of (word &rest seqs)
   (union
    (apply #'find-word-seq word seqs)
-   (let ((table (if (test-word word :kana) 'kana-text 'kanji-text)))
-     (query-dao table (:select 'kt.* :from (:as table 'kt) (:as 'conjugation 'conj)
-                               :where (:and (:= 'kt.seq 'conj.seq)
-                                            (:in 'conj.from (:set seqs))
-                                            (:= 'kt.text word)))))
+   (let* ((kana-p (test-word word :kana))
+          (table (if kana-p 'kana-text 'kanji-text))
+          (tname (if kana-p "kana_text" "kanji_text")))
+     (if (memdict-table-loaded-p tname "conjugation")
+         (memdict-call 'memdict-words-by-conj-from tname word seqs)
+         (query-dao table (:select 'kt.* :from (:as table 'kt) (:as 'conjugation 'conj)
+                                   :where (:and (:= 'kt.seq 'conj.seq)
+                                                (:in 'conj.from (:set seqs))
+                                                (:= 'kt.text word))))))
    :key #'id))
 
 (defun find-word-with-pos (word &rest posi)
@@ -537,10 +543,12 @@
 (pushnew (cons :desu
                (lambda (matches)
                  (let ((seqs (loop for match in matches if (seq match) collect it)))
-                   (< (length (and seqs (query (:select 'seq :from 'conjugation
-                                                        :where (:and (:in 'seq (:set seqs))
-                                                                     (:= 'from 2755350))) ;; じゃない
-                                               :column)))
+                   (< (if (memdict-table-loaded-p "conjugation")
+                          (memdict-call 'memdict-conj-count-by-seq-from seqs 2755350)
+                          (length (and seqs (query (:select 'seq :from 'conjugation
+                                                           :where (:and (:in 'seq (:set seqs))
+                                                                        (:= 'from 2755350))) ;; じゃない
+                                                  :column))))
                       (length matches)))))
          *suffix-unique-only*)
 

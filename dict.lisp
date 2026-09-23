@@ -636,12 +636,23 @@
              (or (ignore-errors (loop for init in inits collect (apply 'make-instance init)))
                  (let ((table (if (test-word word :kana) 'kana-text 'kanji-text)))
                    (select-dao table (:= 'text word))))))
-        (t (let ((table (if (test-word word :kana) 'kana-text 'kanji-text)))
-             (if root-only
-                 (query-dao table (:select 'wt.* :from (:as table 'wt) :inner-join 'entry :on (:= 'wt.seq 'entry.seq)
-                                           :where (:and (:= 'text word)
-                                                        'root-p)))
-                 (select-dao table (:= 'text word)))))))))
+        (t (let* ((kana-p (test-word word :kana))
+                  (table (if kana-p 'kana-text 'kanji-text))
+                  (tname (if kana-p "kana_text" "kanji_text")))
+             ;; R8/Tier 0: a RAM miss is definitive when the table was loaded
+             ;; and its row count verified, so skip the confirming DB probe
+             ;; (this is what lets a serving core run with no connection).
+             (if (and *memdict-p*
+                      (find-package :ichiran/memdict-compact)
+                      (funcall (symbol-function
+                                (intern "MEMDICT-COMPLETE-P" :ichiran/memdict-compact))
+                               tname))
+                 nil
+                 (if root-only
+                     (query-dao table (:select 'wt.* :from (:as table 'wt) :inner-join 'entry :on (:= 'wt.seq 'entry.seq)
+                                               :where (:and (:= 'text word)
+                                                            'root-p)))
+                     (select-dao table (:= 'text word))))))))))
 
 (defun find-substring-words-ram-seed (substring-hash str sticky kana-loaded kanji-loaded)
   "Fill SUBSTRING-HASH from the in-RAM dict (no DB IN queries) for the loaded
@@ -1140,9 +1151,12 @@
                          (and common-p pronoun-p)
                          (= (the fixnum (n-kanji entry)) 0)))
                 (and prefer-kana kanji-p (= ord 0)
-                     (not (query (:select 'id :from 'sense
-                                          :where (:and (:in 'id (:set (mapcar 'sense-id prefer-kana)))
-                                                       (:= 'ord 0))))))
+                     (not (if (memdict-table-loaded-p "sense")
+                              (memdict-call 'memdict-any-sense-ord-0-p
+                                            (mapcar 'sense-id prefer-kana))
+                              (query (:select 'id :from 'sense
+                                              :where (:and (:in 'id (:set (mapcar 'sense-id prefer-kana)))
+                                                           (:= 'ord 0)))))))
                 )))
 
     (when primary-p
@@ -1368,6 +1382,9 @@
     ("memdict-csr-texts")
     ("memdict-kana-forms")
     ("memdict-conj-seqs-from")
+    ("memdict-any-sense-ord-0-p" "sense")
+    ("memdict-conj-count-by-seq-from" "conjugation")
+    ("memdict-words-by-conj-from")
     ("memdict-find" "kana_text")
     ;; R6 residual helpers self-gate on *loaded-tables* inside (they serve
     ;; per-side/partial loads, e.g. kana-only cores), so no gate here.
