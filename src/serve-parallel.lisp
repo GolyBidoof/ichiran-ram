@@ -117,6 +117,11 @@
     (maphash (lambda (k v) (setf (gethash k new) v)) table)
     new))
 
+(defvar *dict-baked* nil
+  "T when the dictionary is already resident in the process image. A baked
+   core sets this before dumping, so startup code can skip re-loading the
+   snapshot and the sense layer, which is the whole point of the core.")
+
 (defvar *db-available* nil
   "Whether workers should open their own DB connection. Probed once, so a
    DB-free core still serves (with only the verified-RAM paths).")

@@ -6,14 +6,21 @@
 (eval-when (:compile-toplevel :load-toplevel :execute) (require :sb-sprof))
 
 (defun warm-boot ()
-  (ichiran/conn:with-db nil
-    (ichiran/memdict-compact:memdict-load-int
-     :snapshot (or (uiop:getenv "SNAPSHOT") "local-env/ichiran-int.snap"))
-    (ichiran/memdict-compact:memdict-load
-     :chunk 200000 :tables '("sense" "gloss" "sense_prop"))
-    (setf ichiran/dict::*memdict-p* t)
-    (ichiran/serve-parallel:warm-caches)
-    (setf ichiran/serve-parallel::*db-available* t))
+  (if ichiran/serve-parallel::*dict-baked*
+      ;; Baked core: the analyzer, the integer layer and the sense layer are
+      ;; already in the image, so there is nothing to read and no database to
+      ;; talk to. Only the per-process caches need priming.
+      (progn
+        (format t "~&warm-boot: dictionary is baked into this image, skipping loads~%")
+        (ichiran/serve-parallel:warm-caches))
+      (ichiran/conn:with-db nil
+        (ichiran/memdict-compact:memdict-load-int
+         :snapshot (or (uiop:getenv "SNAPSHOT") "local-env/ichiran-int.snap"))
+        (ichiran/memdict-compact:memdict-load
+         :chunk 200000 :tables '("sense" "gloss" "sense_prop"))
+        (setf ichiran/dict::*memdict-p* t)
+        (ichiran/serve-parallel:warm-caches)
+        (setf ichiran/serve-parallel::*db-available* t)))
   ;; force the suffix cache to completion so requests do not race its builder
   (ichiran:romanize "テスト")
   (sleep 2)

@@ -62,7 +62,10 @@ else
 fi
 if [ -n "$SYSTEM" ]; then
   SYSTEM_LISP='(ql:quickload :ichiran :silent t)'
-  SYSTEM_TAIL='(load "src/memdict-compact-shims.lisp") (setf ichiran/dict::*memdict-p* t)'
+  # serve-parallel has to be loaded here: it defines *dict-baked*, and the core
+  # sets it so the warm server knows not to re-read the dictionary it already
+  # contains.
+  SYSTEM_TAIL='(load "src/memdict-compact-shims.lisp") (load "src/serve-parallel.lisp") (setf ichiran/dict::*memdict-p* t) (setf ichiran/serve-parallel::*dict-baked* t)'
 else
   SYSTEM_LISP='(format t "bare core (no analyzer baked in)~%")'
   SYSTEM_TAIL='(format t "no shims (bare core)~%")'

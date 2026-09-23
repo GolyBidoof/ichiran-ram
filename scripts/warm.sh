@@ -27,14 +27,25 @@ start() {
   # aborted or timed-out call kills the process group, and a dead listener
   # turns every later request into a full-length wait.
   python3 - "$FIFO" "$OUT" "$PIDF" "$HOLDF" <<'PYEOF'
-import subprocess, sys
+import os, subprocess, sys
 fifo, out, pidf, holdf = sys.argv[1:5]
+# Prefer the baked core when one has been built: it already contains the
+# analyzer and the whole dictionary, so the server reaches WARM-READY in about
+# a second and needs no database, instead of re-reading the snapshot and the
+# sense layer on every start. WARM_NO_CORE=1 forces the old path.
+core = os.environ.get("ICHIRAN_CORE", "local-env/ichiran-serving.core")
+if os.path.exists(core) and os.environ.get("WARM_NO_CORE") != "1":
+    argv = ["./scripts/sbcl-wrapped", "--core", core, "--non-interactive",
+            "--load", "scripts/warm-server.lisp"]
+    print("using baked core", core)
+else:
+    argv = ["./scripts/sbcl-wrapped", "--dynamic-space-size", "14336",
+            "--non-interactive", "--load", "scripts/warm-server.lisp"]
 holder = subprocess.Popen(["sh", "-c", "exec sleep 100000 > " + fifo],
                           start_new_session=True)
 open(holdf, "w").write(str(holder.pid))
 log = open(out, "ab")
-srv = subprocess.Popen(["./scripts/sbcl-wrapped", "--dynamic-space-size", "14336",
-                        "--non-interactive", "--load", "scripts/warm-server.lisp"],
+srv = subprocess.Popen(argv,
                        stdin=open(fifo, "r"), stdout=log, stderr=log,
                        start_new_session=True)
 open(pidf, "w").write(str(srv.pid))
