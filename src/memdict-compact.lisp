@@ -18,7 +18,7 @@
            #:compact-sense-prop-text #:compact-sense-prop-ord
            #:memdict-senses-raw #:memdict-non-arch-posi #:memdict-uk
            #:memdict-entry-by-seq #:memdict-conj-data #:memdict-has-conj-p
-           #:memdict-conj-from-via
+           #:memdict-conj-from-via #:memdict-max-seq
            #:memdict-reset #:memdict-loaded-tables
            ;; R6 residual-query helpers (reading-str/short-sense/conj lists)
            #:memdict-text-by-seq #:memdict-find-by-seq-text
@@ -822,6 +822,23 @@
         (when first
           (let ((gs (memdict-glosses-by-sense (compact-sense-id first))))
             (when gs (join-strings "; " (mapcar 'cdr gs)))))))))
+
+(defun memdict-max-seq ()
+  "Largest seq in the loaded dictionary, or 0. Used to size the flat,
+   seq-indexed gloss JSON caches, which want an exact bound rather than a
+   growable structure."
+  (let ((max-seq 0))
+    (let ((it (gethash "entry" *int-tables*)))
+      (when it
+        (let ((sq (getf it :seqs)))
+          (when sq
+            (dotimes (i (length sq))
+              (let ((v (aref sq i))) (when (> v max-seq) (setf max-seq v))))))))
+    (when (zerop max-seq)
+      (maphash (lambda (k v) (declare (ignore v))
+                 (when (and (integerp k) (> k max-seq)) (setf max-seq k)))
+               *entry-by-seq*))
+    max-seq))
 
 (defun memdict-conj-from-via (conj-id)
   "VALUES (FROM VIA) for CONJ-ID from the in-RAM conjugation table, or NIL.

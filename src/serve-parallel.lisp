@@ -110,6 +110,11 @@
           (ichiran/memdict-compact:memdict-load
            :chunk 200000 :tables '("sense" "gloss" "sense_prop"))))
     (setf ichiran/dict::*memdict-p* t)
+    ;; Size the flat gloss JSON caches from the dictionary just loaded, before
+    ;; the warm pass, so the warm pass also fills them.
+    (let ((m (ichiran/dict::gloss-json-cache-init)))
+      (format t "~&load-dictionary: gloss json caches sized to seq<=~a (~,0f MB)~%"
+              m (/ (* 8.0 (1+ m)) 1048576.0)))
     (warm-caches)
     ;; Probed, not asserted. On the snapshot path nothing above touched
     ;; PostgreSQL, so claiming T here would tell workers to open connections

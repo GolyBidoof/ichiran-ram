@@ -2049,7 +2049,97 @@
 (defun split-pos (pos-str)
   (split-sequence #\, pos-str :start 1 :end (1- (length pos-str))))
 
+;;; ---- R10: flat, seq-indexed caches for the gloss JSON fragments ----
+;;; GET-SENSES-JSON and CONJ-INFO-JSON together are 77% of the cost of building
+;;; a word's gloss JSON, and both return static JMdict data: for a given seq
+;;; and reading (or seq and conjugation set) the result never varies. Measured
+;;; over the F/SN prologue, 87.3% of single-seq word builds repeat a
+;;; (seq reading) pair already seen, a fragment averages 170 bytes, and the
+;;; cost is concentrated in a top decile that holds 89.8% of the time. So this
+;;; is almost entirely repeated work on common words.
+;;;
+;;; A flat vector indexed by seq, not a hash table: seq is an integer, so a
+;;; lookup is one AREF with no hashing, no LRU bookkeeping and no lock. Slots
+;;; are filled lazily and never evicted. A racing write can lose an entry but
+;;; cannot publish a malformed one, since every slot value is a freshly consed
+;;; list that is never mutated in place, so concurrent readers are safe without
+;;; synchronisation. Slot shape is (SENSES-ALIST . CONJ-ALIST).
+;;;
+;;; SEQ is sparse: it runs to 12,297,844 over 2,512,557 entries, so the vector
+;;; is mostly empty and costs about 98 MB of pointers on a 64 bit build. Sizing
+;;; it from the loaded dictionary means it is exact and never resized.
+
+(defvar *gloss-json-cache* nil)
+(defvar *gloss-sense-hits* 0)
+(defvar *gloss-sense-misses* 0)
+(defvar *gloss-conj-hits* 0)
+(defvar *gloss-conj-misses* 0)
+
+(defun %dictionary-max-seq ()
+  "Largest seq in the loaded dictionary, or 0 when there is no RAM dictionary."
+  (or (and (find-package :ichiran/memdict-compact)
+           (let ((f (find-symbol "MEMDICT-MAX-SEQ" :ichiran/memdict-compact)))
+             (and f (fboundp f) (funcall f))))
+      0))
+
+(defun gloss-json-cache-init (&optional max-seq)
+  "Allocate the gloss caches for the dictionary now loaded. Idempotent."
+  (let ((m (or max-seq (%dictionary-max-seq))))
+    (setf *gloss-json-cache* (make-array (1+ m) :initial-element nil)
+          *gloss-sense-hits* 0
+          *gloss-sense-misses* 0
+          *gloss-conj-hits* 0
+          *gloss-conj-misses* 0)
+    m))
+
+(defun gloss-json-cache-stats ()
+  (list :size (if *gloss-json-cache* (length *gloss-json-cache*) 0)
+        :sense-hits *gloss-sense-hits*
+        :sense-misses *gloss-sense-misses*
+        :conj-hits *gloss-conj-hits*
+        :conj-misses *gloss-conj-misses*))
+
+(defun %gloss-cache-slot (seq)
+  "The slot cons for SEQ, or NIL when SEQ is not cacheable."
+  (let ((cache *gloss-json-cache*))
+    (and cache
+         (integerp seq)
+         (>= seq 0)
+         (< seq (length cache))
+         (or (aref cache seq)
+             (setf (aref cache seq) (cons nil nil))))))
+
 (defun get-senses-json (seq &key pos-list reading reading-getter)
+  "Cached %GET-SENSES-JSON. See *GLOSS-JSON-CACHE*.
+
+   The reading is resolved here instead of inside, because it is part of the
+   cache key. That forces READING-GETTER one step earlier than the uncached
+   version does, which costs a text lookup measured in microseconds against a
+   fragment measured in hundreds. The resolved reading is passed down as
+   :reading, and a constant getter is passed only when the caller supplied one,
+   so the inner restriction check sees exactly what it saw before."
+  (let* ((rd (or reading (and reading-getter (funcall reading-getter))))
+         ;; The reading arrives as a row object, and the RAM layer returns a
+         ;; fresh struct per call, so EQ and EQUAL on the object never match:
+         ;; keying on it gave a 0.5% hit rate. Key on the values that actually
+         ;; decide the result instead. MATCH-SENSE-RESTRICTIONS reads only the
+         ;; reading text and the word type out of it, and WORD-INFO-READING
+         ;; looks the row up by text, so those two determine it exactly.
+         (rt (cond ((null rd) nil) ((stringp rd) rd) (t (text rd))))
+         (key (list pos-list rt (and rd (word-type rd))))
+         (slot (%gloss-cache-slot seq))
+         (hit (and slot (assoc key (car slot) :test 'equal))))
+    (if hit
+        (progn (incf *gloss-sense-hits*) (cdr hit))
+        (let ((res (%get-senses-json seq :pos-list pos-list :reading rd
+                                     :reading-getter (and reading-getter
+                                                          (constantly rd)))))
+          (incf *gloss-sense-misses*)
+          (when slot
+            (setf (car slot) (cons (cons key res) (car slot))))
+          res))))
+
+(defun %get-senses-json (seq &key pos-list reading reading-getter)
   (loop with readp
      for (pos gloss props) in (get-senses seq)
      for emptypos = (equal pos "[]")
@@ -2231,10 +2321,21 @@
                (list js)))))
 
 (defun conj-info-json (seq &rest rest &key conjugations text has-gloss)
+  "Cached CONJ-INFO-JSON*. See *GLOSS-JSON-CACHE*. The conjugation set, the
+   surface text and whether a gloss was emitted are the whole key."
   (declare (ignorable conjugations text has-gloss))
-  (let* ((cij (apply 'conj-info-json* seq rest))
-         (fcij (remove-if-not (lambda (c) (jsown:val c "readok")) cij)))
-    (or fcij cij)))
+  (let* ((slot (%gloss-cache-slot seq))
+         (key (list conjugations text has-gloss))
+         (hit (and slot (assoc key (cdr slot) :test 'equal))))
+    (if hit
+        (progn (incf *gloss-conj-hits*) (cdr hit))
+        (let* ((cij (apply 'conj-info-json* seq rest))
+               (fcij (remove-if-not (lambda (c) (jsown:val c "readok")) cij))
+               (res (or fcij cij)))
+          (incf *gloss-conj-misses*)
+          (when slot
+            (setf (cdr slot) (cons (cons key res) (cdr slot))))
+          res))))
 
 (defun simplify-reading-list (reading-list)
   ;; I'm sure there's a simpler way to do this...
