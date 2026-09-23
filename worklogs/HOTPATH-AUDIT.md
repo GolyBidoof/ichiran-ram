@@ -120,10 +120,33 @@ both verified correct in isolation, and together they moved the corpus from
   so its candidate list for a text is in reverse query order, and the RAM seed
   was assigning forwards. Kept for the same reason.
 
-Neither changed the corpus result, so the candidate list order is evidently
-not what decides the ordering that actually diverges. The 81 remaining lines
-are still unexplained and the next step is to trace one of them end to end
-rather than reason about which stage looks responsible.
+Neither changed the corpus result, because neither was the operative path.
+Tracing line 10 (`ありがとうございます`) end to end found the reason, and parity
+is now **0 of 364 lines differing**.
+
+`find-word` has an early return, above the hash:
+
+```lisp
+(when (and (not root-only) *memdict-p*)
+  (let ((mem (funcall ... "MEMDICT-FIND" ... word)))
+    (when mem (return-from find-word mem))))   ; bypasses *substring-hash*
+```
+
+Under the RAM path this returns straight from `MEMDICT-FIND` and never
+consults `*substring-hash*`, so reversing the seed was dead code: the seed is
+only read on the path this return skips. The database path does read the hash,
+and the hash is filled with `PUSH`, so its candidate list is in reverse query
+order. The RAM path therefore had to reverse **at the early return**, which is
+where the candidate order that `find-word-full` turns into the primary word
+for a span is actually established. `expand-segment-list` then groups each
+segment as `[segment, segsplit]`, so getting the primary the wrong way round
+printed the alternative list swapped.
+
+The lesson is the one the retraction was about: the row order fix and the
+seed reversal were both defensible from reading the code, and both were
+irrelevant, because the code that ran was a third path. Instrumenting the one
+diverging line found it in a single pass where three rounds of reasoning about
+which stage "looked responsible" had not.
 
 What is solid is the measurement, not the explanation. Structural diffing by
 JSON path shows the dominant signature is `seq` on 72 lines, `gloss` on 70 and

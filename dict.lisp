@@ -624,7 +624,18 @@
           (let ((mem (funcall (symbol-function (intern "MEMDICT-FIND" pkg))
                               (if (test-word word :kana) 'kana-text 'kanji-text)
                               word)))
-            (when mem (return-from find-word mem))))))
+            (when mem
+              ;; REVERSED, and this is the only place it matters for the RAM
+              ;; path. The database path reaches these same rows through
+              ;; *substring-hash*, which find-substring-words fills with PUSH,
+              ;; so its candidate list is in reverse query order. This early
+              ;; return sits ABOVE the hash, so it never sees that ordering:
+              ;; returning mem forward here made find-word-full pick the other
+              ;; word as the primary for a span, and expand-segment-list's
+              ;; [segment, segsplit] grouping then printed the alternative
+              ;; list in the opposite order. Reversing the seed instead had no
+              ;; effect at all, because this return skips the seed.
+              (return-from find-word (reverse mem)))))))
     ;; The substring-hash fast path stores initarg plists per sentence, seeded
     ;; to NIL for every window part and filled only for DB hits. Distinguish
     ;; "checked, not a dictionary word" (present with NIL value -> return NIL,
