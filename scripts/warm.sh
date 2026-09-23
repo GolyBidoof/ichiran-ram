@@ -26,7 +26,7 @@ start() {
   sleep 100000 > "$FIFO" &
   echo $! > "$HOLDF"
   ./scripts/sbcl-wrapped --dynamic-space-size 14336 --non-interactive \
-    --load local-env/scratch/warm-server.lisp < "$FIFO" >> "$OUT" 2>&1 &
+    --load scripts/warm-server.lisp < "$FIFO" >> "$OUT" 2>&1 &
   echo $! > "$PIDF"
   echo "booting pid $(cat "$PIDF"); waiting for WARM-READY ..."
   for _ in $(seq 1 240); do
@@ -45,7 +45,7 @@ send() {
   before=$(grep -ac "WARM-RESULT" "$OUT" 2>/dev/null | head -1)
   want=$(( ${before:-0} + 1 ))
   printf '%s\n' "$1" > "$FIFO" || return 1
-  for _ in $(seq 1 900); do
+  for _ in $(seq 1 ${WARM_WAIT:-240}); do
     if grep -aq "^WARM-RESULT-END $want$" "$OUT" 2>/dev/null; then
       awk -v n="$want" '
         $0 == "WARM-RESULT-BEGIN " n { inb=1; next }

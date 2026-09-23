@@ -1,7 +1,7 @@
 ;;; warm-server.lisp — a long-lived, warmed process that evaluates forms sent
 ;;; on stdin. Started by warm.sh; exists so that measurements do not each pay
 ;;; the Quicklisp + snapshot load (~10s) again.
-(ql:quickload :ichiran :silent t)
+(ql:quickload (list :ichiran :ichiran/cli) :silent t)
 (load "src/memdict-compact.lisp")
 (load "src/memdict-int.lisp")
 (load "src/memdict-compact-shims.lisp")
@@ -71,6 +71,41 @@
                                            internal-time-units-per-second)))
                        (/ (- (sb-ext:get-bytes-consed) b0) 1048576.0)))))
       (format nil "~a | ~a" (one 1) (one workers)))))
+
+(defun ram-dump (&optional (out "/tmp/ram-warm.json"))
+  "Dump the golden corpus through THIS warm process's RAM path, so it can be
+   compared against the cached database baseline
+   (data/golden-corpus-baseline.json) in seconds. The database side must never
+   be regenerated for a comparison: it is the reference and it is already on
+   disk."
+  (with-open-file (corpus (asdf:system-relative-pathname :ichiran "data/golden-corpus.txt"))
+    (with-open-file (res out :direction :output :if-exists :supersede)
+      (loop for line = (read-line corpus nil nil)
+            while line
+            for text = (string-trim '(#\Space #\Tab #\Newline) line)
+            unless (or (zerop (length text)) (char= (char text 0) #\#))
+              do (princ (jsown:to-json
+                         (handler-case (ichiran:romanize* text :limit 5)
+                           (error (e) (list :error (princ-to-string e)))))
+                        res)
+                 (terpri res))))
+  out)
+
+(defun ram-order (table text)
+  "First few ids and seqs the RAM path returns for TEXT, to compare against
+   the database's own row order for the same query."
+  (let ((rows (ichiran/memdict-compact:memdict-find table text)))
+    (list :n (length rows)
+          :ids (loop for r in (subseq rows 0 (min 6 (length rows)))
+                     collect (funcall (if (equal table 'kana-text)
+                                          'ichiran/memdict-compact:compact-kana-id
+                                          'ichiran/memdict-compact:compact-kanji-id)
+                                      r))
+          :seqs (loop for r in (subseq rows 0 (min 6 (length rows)))
+                      collect (funcall (if (equal table 'kana-text)
+                                           'ichiran/memdict-compact:compact-kana-seq
+                                           'ichiran/memdict-compact:compact-kanji-seq)
+                                       r)))))
 
 (format t "~&WARM-BOOTING~%") (finish-output)
 (warm-boot)
