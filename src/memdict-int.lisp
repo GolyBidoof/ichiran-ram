@@ -590,7 +590,17 @@
                        (vector-push-extend conj-id conj-ids)
                        (vector-push-extend (pool conj-type types type-index) type-ids)
                        (vector-push-extend (pool pos poss pos-index) pos-ids)
-                       (vector-push-extend (logior (if neg 1 0) (if fml 2 0)) flags)))
+                       ;; neg/fml are three-state in the DB: t, false, and
+                       ;; NULL. Collapsing "non-nil" into true turned the
+                       ;; 85k NULL neg and 102k NULL fml rows into "neg":
+                       ;; true, which the database path omits, and that alone
+                       ;; made 190 of 364 golden lines differ between the two
+                       ;; paths. Two bits per flag carry all three states.
+                       (vector-push-extend (logior (if (eq neg t) 1 0)
+                                                   (if (eq neg :null) 2 0)
+                                                   (if (eq fml t) 4 0)
+                                                   (if (eq fml :null) 8 0))
+                                           flags)))
                    (setf last-id (caar (last rows))))))
       (let* ((n (fill-pointer ids))
              (ids-v (int-u32-col ids n))
@@ -624,12 +634,15 @@
     (when range
       (loop for k from (car range) below (+ (car range) (cdr range))
             for i = (aref (getf table :major) k)
+            for fl = (aref (getf table :flags) i)
             collect (list (aref (getf table :ids) i)
                           conj-id
                           (aref (getf table :types) (aref (getf table :type-ids) i))
                           (aref (getf table :poss) (aref (getf table :pos-ids) i))
-                          (plusp (logand (aref (getf table :flags) i) 1))
-                          (plusp (logand (aref (getf table :flags) i) 2)))))))
+                          ;; t / false / NULL, matching what the DB loader
+                          ;; hands the analyzer.
+                          (if (logtest 1 fl) t (if (logtest 2 fl) :null nil))
+                          (if (logtest 4 fl) t (if (logtest 8 fl) :null nil)))))))
 
 (defun int-load-csr (&key (chunk 200000) conn)
   "Load conj_source_reading (id conj-id text source-text). ORDER BY id."

@@ -583,23 +583,53 @@
    same tags the DB path uses (pos s_inf stagk stagr field).
    Deterministic order matching the DB's ORDER BY sense.ord, tag, prop.ord:
    senses by ord, tags sorted, texts in prop-ord order."
-  (loop for sense in (memdict-senses-by-seq seq)
+  (let ((senses (memdict-senses-by-seq seq)))
+   (loop for sense in senses
+        for idx from 0
+        for last-sense-p = (= idx (1- (length senses)))
         for sense-id = (compact-sense-id sense)
         for gloss = (let ((gs (memdict-glosses-by-sense sense-id)))
                       (if gs
                           (join-strings "; " (mapcar 'cdr gs))
                           ""))
-        for props = (let ((bag (make-hash-table :test 'equal)))
-                      (dolist (p (sort (copy-list (gethash sense-id *prop-by-sense*))
-                                       '< :key 'compact-sense-prop-ord))
-                        (when (member (compact-sense-prop-tag p)
-                                      '("pos" "s_inf" "stagk" "stagr" "field") :test 'equal)
-                          (push (compact-sense-prop-text p)
-                                (gethash (compact-sense-prop-tag p) bag))))
-                      (sort (loop for tag being the hash-keys of bag
-                                  collect (cons tag (nreverse (gethash tag bag))))
-                            'string< :key 'car))
-        collect (list :ord (compact-sense-ord sense) :gloss gloss :props props)))
+        for props = (memdict-props-in-db-order sense-id last-sense-p)
+        collect (list :ord (compact-sense-ord sense) :gloss gloss :props props))))
+
+(defun memdict-props-in-db-order (sense-id last-sense-p)
+  "Tag/text pairs in exactly the order ichiran/dict::get-senses-raw produces.
+   The DB path reads props ORDER BY sense.ord, tag, prop.ord and accumulates
+   each (sense, tag) group with PUSH, reversing a group only when the NEXT
+   group begins. Its final group therefore stays in reverse accumulating
+   order, and reproducing that quirk is required for byte-identical output:
+   entry 1648700 comes out as [vt,vs,n] from the database and would come out
+   [n,vs,vt] from a path that reversed every group. Only the last tag group of
+   the last sense is affected because it is the only one with no successor."
+  (let* ((tags '("pos" "s_inf" "stagk" "stagr" "field"))
+         (ps (remove-if-not (lambda (p)
+                              (member (compact-sense-prop-tag p) tags :test 'equal))
+                            (copy-list (gethash sense-id *prop-by-sense*))))
+         ;; ORDER BY tag, prop.ord -- within a sense that is tag order first.
+         (sorted (sort ps (lambda (a b)
+                            (let ((ta (compact-sense-prop-tag a))
+                                  (tb (compact-sense-prop-tag b)))
+                              (if (equal ta tb)
+                                  (< (compact-sense-prop-ord a)
+                                     (compact-sense-prop-ord b))
+                                  (string< ta tb))))))
+         (groups nil))
+    ;; consecutive same-tag runs, accumulated with PUSH like the DB path
+    (dolist (p sorted)
+      (let ((tag (compact-sense-prop-tag p)))
+        (if (and groups (equal (caar groups) tag))
+            (push (compact-sense-prop-text p) (cdar groups))
+            (push (list tag (compact-sense-prop-text p)) groups))))
+    (setf groups (nreverse groups))
+    (loop for g in groups
+          for last-group-p = (eq g (car (last groups)))
+          collect (cons (car g)
+                        (if (and last-group-p last-sense-p)
+                            (cdr g)                 ; unreversed, as in the DB
+                            (nreverse (cdr g)))))))
 
 (defun memdict-non-arch-posi (seq-set)
   "Mirror ichiran/dict::get-non-arch-posi: distinct pos texts for seqs in

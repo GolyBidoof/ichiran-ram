@@ -111,6 +111,26 @@
 (defmethod ichiran/dict::best-kana ((obj compact-kanji)) (compact-kanji-best-kana obj))
 (defmethod ichiran/dict::id ((obj compact-kanji)) (compact-kanji-id obj))
 
+;; ---- reading-str ----
+;; reading-str has methods for simple-text and integer. kanji-text and
+;; kana-text inherit the simple-text one, but compact rows are structs, not
+;; simple-text subclasses, so they need their own or the RAM path signals
+;; NO-APPLICABLE-METHOD where the database path succeeds. Found by
+;; scripts/ram-parity.sh, which compares the whole golden corpus between the
+;; two paths -- it reached this on a conjugated reading of 覧る, a case the
+;; unit tests do not cover.
+(defmethod ichiran/dict::get-kanji ((obj compact-kanji))
+  ;; Mirror kanji-text: for a kanji row the text IS the kanji form.
+  (compact-kanji-text obj))
+
+(defmethod ichiran/dict::reading-str ((obj compact-kana))
+  (ichiran/dict::reading-str* (ichiran/dict::get-kanji obj)
+                              (ichiran/dict::get-kana obj)))
+
+(defmethod ichiran/dict::reading-str ((obj compact-kanji))
+  (ichiran/dict::reading-str* (ichiran/dict::get-kanji obj)
+                              (ichiran/dict::get-kana obj)))
+
 (defmethod ichiran/dict::seq ((obj compact-conj)) (compact-conj-seq obj))
 (defmethod ichiran/dict::seq-from ((obj compact-conj)) (compact-conj-from obj))
 (defmethod ichiran/dict::seq-via ((obj compact-conj)) (compact-conj-via obj))
