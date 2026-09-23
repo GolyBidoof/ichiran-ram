@@ -41,7 +41,7 @@ database is 52 to 72ms per line against 4 to 6.5ms.
 | snapshot, integer layer | 1644 MB |
 | snapshot, sense layer | 26 MB |
 | baked core | 466 MB compressed |
-| live heap of the whole dictionary | 2786 MB |
+| live heap of the whole dictionary | 2739 MB |
 
 The live heap is the interesting number. Before the string pools were encoded
 the same dictionary sat around 8GB, because the memory was dominated not by the
