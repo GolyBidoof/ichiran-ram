@@ -32,28 +32,18 @@
 
 (defstruct int-text-table
   (n 0 :type fixnum)
-  ;; TEXTS is an ENCODED pool: one concatenated string. TEXT-OFFSETS holds its
-  ;; N+1 character offsets and TEXT-ORDER lists pool indices sorted by text, so
-  ;; a lookup is a binary search that reads straight out of the blob. It used to
-  ;; be a simple-vector with one Lisp string per entry plus an equal hash table;
-  ;; at 8.4M entries across the two text tables, building those strings was
-  ;; 2.9s of the snapshot decode and rebuilding the hash another 0.8s.
+  ;; Texts live in one concatenated string with N+1 offsets into it, and
+  ;; TEXT-ORDER holds pool indices sorted by string, so a lookup binary-searches
+  ;; the blob without building a string per entry. Sizing and timings for that
+  ;; choice are in worklogs/PERF-RESULTS.md.
   (texts "" :type string)
   (text-offsets #() :type (simple-array (unsigned-byte 32) (*)))
   (text-order #() :type (simple-array (unsigned-byte 32) (*)))
-  ;; First-character direct index in CSR shape: one flat (unsigned-byte 32)
-  ;; vector of 65537 offsets. The texts beginning with BMP character code C
-  ;; occupy the half-open run [offsets[C], offsets[C+1]) of TEXT-ORDER positions.
-  ;; TEXT-ORDER is sorted by STRING<, which orders by character code, so each
-  ;; code owns exactly one contiguous run, and a lookup is two adjacent array
-  ;; reads instead of two pointer dereferences. 65537 slots is 256KB, small
-  ;; enough to stay resident in cache. Filled by INT-TEXT-BUILD-FIRST-CHAR; an
-  ;; empty array means "not built" and every lookup then searches the full
-  ;; range, so a table whose order turns out not to be sorted by first character
-  ;; stays correct.
-  ;; The default has to be built with the element type, not the literal #():
-  ;; a bare #() is a SIMPLE-VECTOR and fails this slot's type check, which broke
-  ;; every construction path that omits the slot, the snapshot loader included.
+  ;; CSR index over TEXT-ORDER: the texts starting with BMP code C occupy
+  ;; [first-char[C], first-char[C+1]). Empty means not built, and lookups then
+  ;; search all of TEXT-ORDER, so an unsorted table is still correct. Built by
+  ;; INT-TEXT-BUILD-FIRST-CHAR. The default must be a typed array: a literal #()
+  ;; is a SIMPLE-VECTOR and fails this slot's type check.
   (first-char (make-array 0 :element-type '(unsigned-byte 32))
               :type (simple-array (unsigned-byte 32) (*)))
   (ids #() :type (simple-array (unsigned-byte 32) (*)))
@@ -82,6 +72,81 @@
     (if pkg
         (symbol-value (find-symbol "*CONNECTION*" pkg))
         (error "int-load-text needs a :conn spec (no ichiran/conn loaded)"))))
+
+;;; ---- loader helpers (shared by every INT-LOAD-* below) ----
+
+(defun int-pool-string (string pool index)
+  "Index of STRING in POOL, appending it the first time it is seen.
+   POOL is a fill-pointer string vector and INDEX an equal string-to-index hash."
+  (or (gethash string index)
+      (let ((i (fill-pointer pool)))
+        (vector-push-extend string pool)
+        (setf (gethash string index) i)
+        i)))
+
+(defun freeze-u32-vector (v)
+  "Copy V into a plain u32 vector. LENGTH rather than FILL-POINTER, because V
+   is a fill-pointer column in some callers and a plain array (RANKS) in others."
+  (let ((out (make-array (length v) :element-type '(unsigned-byte 32))))
+    (replace out v)))
+
+(defun freeze-i32-vector (v)
+  "Copy V into a plain i32 vector. See FREEZE-U32-VECTOR."
+  (let ((out (make-array (length v) :element-type '(signed-byte 32))))
+    (replace out v)))
+
+(defun freeze-u8-vector (v)
+  "Copy V into a plain u8 vector. See FREEZE-U32-VECTOR."
+  (let ((out (make-array (length v) :element-type '(unsigned-byte 8))))
+    (replace out v)))
+
+(defun freeze-generic-vector (v)
+  "Copy the string pool V into a plain vector, respecting its active length."
+  (let ((out (make-array (length v))))
+    (replace out v)))
+
+(defun int-index-order (n keys ranks key-space)
+  "Order N rows by (KEY, RANK), for the text-major and seq-major indexes.
+   Returns (values INDEX START COUNT), where the rows of key k are
+   INDEX[START[k] .. START[k]+COUNT[k]). KEY-SPACE is the number of keys.
+   KEY and RANK pack into one fixnum so the sort needs no comparator call."
+  (let ((order (make-array n :element-type 'fixnum)))
+    (loop for i from 0 below n do (setf (aref order i) i))
+    (sort order '< :key (lambda (i) (+ (ash (aref keys i) 32) (aref ranks i))))
+    (let ((index (make-array n :element-type '(unsigned-byte 32)))
+          (start (make-array key-space :element-type '(unsigned-byte 32)
+                             :initial-element 0))
+          (count (make-array key-space :element-type '(unsigned-byte 32)
+                             :initial-element 0)))
+      (loop for pos from 0 below n
+            for i = (aref order pos)
+            do (setf (aref index pos) i)
+               (let ((k (aref keys i)))
+                 (when (zerop (aref count k))
+                   (setf (aref start k) pos))
+                 (incf (aref count k))))
+      (values index start count))))
+
+(defun int-text-physical-ranks (table ids n conn)
+  "Physical (ctid) rank of the N rows named by IDS, used as the order tie-break.
+
+   This order reaches the output: the database path selects these rows with no
+   ORDER BY, so Postgres returns ctid order, and EXPAND-SEGMENT-LIST's stable
+   sort keeps score ties in input order. Ranking by id instead changed 72 of 364
+   golden lines. Runs inside WITH-CONNECTION because callers pass an explicit
+   CONN rather than a global connection."
+  (postmodern:with-connection conn
+    (let* ((heap-ids (query (format nil "SELECT id FROM ~a ORDER BY ctid" table)
+                            :column))
+           (rank-of-id (make-array (1+ (reduce #'max heap-ids))
+                                   :element-type '(unsigned-byte 32)
+                                   :initial-element 0)))
+      (loop for id in heap-ids for r from 0
+            do (setf (aref rank-of-id id) r))
+      (let ((out (make-array n :element-type '(unsigned-byte 32))))
+        (loop for i from 0 below n
+              do (setf (aref out i) (aref rank-of-id (aref ids i))))
+        out))))
 
 (defun int-load-text (table &key (chunk 200000) conn)
   "Load kana_text or kanji_text into an integer-keyed table. ORDER BY id (unordered
@@ -122,36 +187,30 @@
           (kanas-pool (make-array 1024 :fill-pointer 0 :adjustable t))
           (kana-pool-idx (make-hash-table :test 'equal))
           (max-seq 0))
-      (labels ((pool (s pool-vec pool-idx)
-                 (or (gethash s pool-idx)
-                     (let ((i (fill-pointer pool-vec)))
-                       (vector-push-extend s pool-vec)
-                       (setf (gethash s pool-idx) i)
-                       i))))
-        ;; Null sentinel: "" is always pool index 0 on both sides.
+      (flet ((pool (s pool-vec pool-idx) (int-pool-string s pool-vec pool-idx)))
+        ;; "" must be interned first: it is the null sentinel at index 0.
         (pool "" kanjis-pool kanji-pool-idx)
         (pool "" kanas-pool kana-pool-idx)
         (postmodern:with-connection conn
-          ;; Keyset pagination, not LIMIT/OFFSET: with OFFSET k Postgres
-          ;; re-scans and discards k rows for every chunk, which is quadratic
-          ;; (conj_source_reading needs 42 chunks for its 8.4M rows).
+          ;; Keyset pagination: OFFSET would re-scan and discard k rows per
+          ;; chunk, which is quadratic over 8.4M rows.
           (loop with last-id = -1
                 for rows = (postmodern:query
                             (format nil "SELECT id, seq, text, ord, common, common_tags, conjugate_p, nokanji, ~a FROM ~a WHERE id > ~a ORDER BY id LIMIT ~a"
                                     best-col table last-id chunk)
                             :lists)
                 while rows
-                do (dolist (pl rows)
-                     (destructuring-bind (id seq text ord common tags conj nokanji best-kanji) pl
-                       (let ((ti (or (gethash text text-index)
-                                     (let ((i (fill-pointer texts)))
-                                       (vector-push-extend text texts)
-                                       (setf (gethash text text-index) i)
-                                       i))))
+                do (dolist (row rows)
+                     (destructuring-bind (id seq text ord common tags conj nokanji best-kanji) row
+                       (let ((text-id (or (gethash text text-index)
+                                          (let ((i (fill-pointer texts)))
+                                            (vector-push-extend text texts)
+                                            (setf (gethash text text-index) i)
+                                            i))))
                          (vector-push-extend id ids)
                          (vector-push-extend seq seqs)
                          (vector-push-extend ord ords)
-                         (vector-push-extend ti text-ids)
+                         (vector-push-extend text-id text-ids)
                          (vector-push-extend (if (eql common :null) -1 common) commons)
                          (vector-push-extend (logior (if conj 1 0) (if nokanji 2 0)) flags)
                          (vector-push-extend (pool tags tags-pool tag-pool-idx) tag-ids)
@@ -163,101 +222,32 @@
                                       (vector-push-extend (pool best kanas-pool kana-pool-idx) kana-ids))))
                          (when (> seq max-seq) (setf max-seq seq)))))
                    (setf last-id (caar (last rows))))))
-        ;; Freeze columns (explicit copies: fill-pointer semantics of
-        ;; coerce are implementation-subtle; replace respects active length).
-        (let* ((n (fill-pointer ids))
-               (freeze-u32 (lambda (v) (let ((out (make-array n :element-type '(unsigned-byte 32))))
-                                         (replace out v))))
-               (freeze-i32 (lambda (v) (let ((out (make-array n :element-type '(signed-byte 32))))
-                                         (replace out v))))
-               (freeze-u8 (lambda (v) (let ((out (make-array n :element-type '(unsigned-byte 8))))
-                                        (replace out v))))
-               (freeze-vec (lambda (v) (let ((out (make-array (fill-pointer v))))
-                                         (replace out v))))
-               (nt (length texts))
-               (text-major (make-array n :element-type '(unsigned-byte 32)))
-               (text-start (make-array nt :element-type '(unsigned-byte 32) :initial-element 0))
-               (text-count (make-array nt :element-type '(unsigned-byte 32) :initial-element 0))
-               (seq-major (make-array n :element-type '(unsigned-byte 32)))
-               (seq-start (make-array (1+ max-seq) :element-type '(unsigned-byte 32) :initial-element 0))
-               (seq-count (make-array (1+ max-seq) :element-type '(unsigned-byte 32) :initial-element 0))
-               ;; Physical row order. The database path reaches these rows
-               ;; through select-dao calls that carry no ORDER BY, so Postgres
-               ;; returns them in ctid order (the text btree stores equal keys
-               ;; in ctid order, so an index scan preserves it). Downstream,
-               ;; expand-segment-list stable-sorts candidates by score and a
-               ;; stable sort leaves ties in input order, which makes this
-               ;; order visible in the output: 72 of 364 golden lines differed
-               ;; purely because the tie-break here was id rather than
-               ;; physical position.
-               ;; Inside WITH-CONNECTION: this binding is evaluated before the
-               ;; loader's body, so a bare QUERY here failed with "No database
-               ;; connection selected" whenever memdict-load-int was called
-               ;; with an explicit :conn instead of a global connection (which
-               ;; is how build-image.sh calls it).
-               (ranks (postmodern:with-connection conn
-                        (let* ((heap-ids (query (format nil "SELECT id FROM ~a ORDER BY ctid"
-                                                        table)
-                                                :column))
-                               (rank-of-id (make-array (1+ (reduce #'max heap-ids))
-                                                       :element-type '(unsigned-byte 32)
-                                                       :initial-element 0)))
-                          (loop for id in heap-ids for r from 0
-                                do (setf (aref rank-of-id id) r))
-                          (let ((out (make-array n :element-type '(unsigned-byte 32))))
-                            (loop for i from 0 below n
-                                  do (setf (aref out i)
-                                           (aref rank-of-id (aref ids i))))
-                            out)))))
-          ;; Text-major order: sort row indices by (text-idx, physical rank).
-          ;; Key packs into one fixnum (text-idx < 2^22, rank < 2^32).
-          (let ((order (make-array n :element-type 'fixnum)))
-            (loop for i from 0 below n do (setf (aref order i) i))
-            (sort order '< :key (lambda (i) (+ (ash (aref text-ids i) 32)
-                                               (aref ranks i))))
-            (loop for pos from 0 below n
-                  for i = (aref order pos)
-                  do (setf (aref text-major pos) i)
-                     (let ((ti (aref text-ids i)))
-                       (when (zerop (aref text-count ti))
-                         (setf (aref text-start ti) pos))
-                       (incf (aref text-count ti)))))
-          ;; Seq-major order: sort row indices by (seq, id). Same packing
-          ;; (seq < 2^24).
-          (let ((order (make-array n :element-type 'fixnum)))
-            (loop for i from 0 below n do (setf (aref order i) i))
-            (sort order '< :key (lambda (i) (+ (ash (aref seqs i) 32)
-                                               (aref ranks i))))
-            (loop for pos from 0 below n
-                  for i = (aref order pos)
-                  do (setf (aref seq-major pos) i)
-                     (let ((sq (aref seqs i)))
-                       (when (zerop (aref seq-count sq))
-                         (setf (aref seq-start sq) pos))
-                       (incf (aref seq-count sq)))))
-          ;; Encode the pool and sort an index into it, which replaces both
-          ;; the per-entry strings and the equal hash table used to find them.
+        (let* ((row-count (fill-pointer ids))
+               (distinct-texts (length texts))
+               (ranks (int-text-physical-ranks table ids row-count conn)))
+          (multiple-value-bind (text-major text-start text-count)
+              (int-index-order row-count text-ids ranks distinct-texts)
+          (multiple-value-bind (seq-major seq-start seq-count)
+              (int-index-order row-count seqs ranks (1+ max-seq))
           (multiple-value-bind (texts-blob text-off) (pool-encode texts)
-            (let ((text-order (make-array nt :element-type '(unsigned-byte 32))))
-              (loop for i from 0 below nt do (setf (aref text-order i) i))
-              (sort text-order (lambda (a b) (string< (aref texts a) (aref texts b))))
+            (let ((text-order (text-order-by-string< texts)))
           (sb-ext:gc :full t)
           (let ((after (sb-kernel:dynamic-usage)))
             (values (make-int-text-table
-                     :n n :texts texts-blob :text-offsets text-off
+                     :n row-count :texts texts-blob :text-offsets text-off
                      :text-order text-order
-                     :ids (funcall freeze-u32 ids) :seqs (funcall freeze-u32 seqs)
-                     :ords (funcall freeze-u32 ords) :ranks (funcall freeze-u32 ranks)
-                     :text-ids (funcall freeze-u32 text-ids)
-                     :commons (funcall freeze-i32 commons)
-                     :flags (funcall freeze-u8 flags)
-                     :tags (funcall freeze-vec tags-pool) :tag-ids (funcall freeze-u32 tag-ids)
-                     :kanjis (funcall freeze-vec kanjis-pool) :kanji-ids (funcall freeze-u32 kanji-ids)
-                     :kanas (funcall freeze-vec kanas-pool) :kana-ids (funcall freeze-u32 kana-ids)
+                     :ids (freeze-u32-vector ids) :seqs (freeze-u32-vector seqs)
+                     :ords (freeze-u32-vector ords) :ranks (freeze-u32-vector ranks)
+                     :text-ids (freeze-u32-vector text-ids)
+                     :commons (freeze-i32-vector commons)
+                     :flags (freeze-u8-vector flags)
+                     :tags (freeze-generic-vector tags-pool) :tag-ids (freeze-u32-vector tag-ids)
+                     :kanjis (freeze-generic-vector kanjis-pool) :kanji-ids (freeze-u32-vector kanji-ids)
+                     :kanas (freeze-generic-vector kanas-pool) :kana-ids (freeze-u32-vector kana-ids)
                      :text-major text-major :text-start text-start :text-count text-count
                      :seq-major seq-major :seq-start seq-start :seq-count seq-count
                      :max-seq max-seq)
-                    (- after before)))))))))
+                    (- after before)))))))))))
 
 (defun int-text-row-count (table)
   (int-text-table-n table))
@@ -311,6 +301,12 @@
              (incf pos (length str)))
     (setf (aref off n) pos)
     (values blob off)))
+
+(defun text-order-by-string< (texts)
+  "Pool indices 0..N-1 of TEXTS, sorted by the strings they name."
+  (let ((order (make-array (length texts) :element-type '(unsigned-byte 32))))
+    (loop for i from 0 below (length texts) do (setf (aref order i) i))
+    (sort order (lambda (a b) (string< (aref texts a) (aref texts b))))))
 
 (defun pool-ref (blob off i)
   "The I-th string of a pool encoded by POOL-ENCODE."
@@ -579,12 +575,7 @@
           (contents (make-array 1024 :fill-pointer 0 :adjustable t))
           (content-index (make-hash-table :test 'equal))
           (max-seq 0))
-      (labels ((pool (s)
-                 (or (gethash s content-index)
-                     (let ((i (fill-pointer contents)))
-                       (vector-push-extend s contents)
-                       (setf (gethash s content-index) i)
-                       i))))
+      (flet ((pool (s) (int-pool-string s contents content-index)))
         (postmodern:with-connection conn
           (loop with last-seq = -1
                 for rows = (postmodern:query
@@ -801,12 +792,7 @@
           (type-index (make-hash-table :test 'equal))
           (poss (make-array 1024 :fill-pointer 0 :adjustable t))
           (pos-index (make-hash-table :test 'equal)))
-      (labels ((pool (s vec idx)
-                 (or (gethash s idx)
-                     (let ((i (fill-pointer vec)))
-                       (vector-push-extend s vec)
-                       (setf (gethash s idx) i)
-                       i))))
+      (flet ((pool (s vec idx) (int-pool-string s vec idx)))
         (postmodern:with-connection conn
           (loop with last-id = -1
                 for rows = (postmodern:query
@@ -891,12 +877,7 @@
           (text-index (make-hash-table :test 'equal))
           (srcs (make-array 1024 :fill-pointer 0 :adjustable t))
           (src-index (make-hash-table :test 'equal)))
-      (labels ((pool (s vec idx)
-                 (or (gethash s idx)
-                     (let ((i (fill-pointer vec)))
-                       (vector-push-extend s vec)
-                       (setf (gethash s idx) i)
-                       i))))
+      (flet ((pool (s vec idx) (int-pool-string s vec idx)))
         (postmodern:with-connection conn
           (loop with last-id = -1
                 for rows = (postmodern:query

@@ -9,7 +9,6 @@
            #:compact-kanji-seq #:compact-kana-ord #:compact-kanji-ord
            #:compact-kana-best-kana #:compact-kanji-best-kana
            #:make-compact-kana #:make-compact-kanji
-           ;; R5 full-dict exports
            #:compact-sense #:compact-gloss #:compact-sense-prop
            #:make-compact-sense #:make-compact-gloss #:make-compact-sense-prop
            #:memdict-save-sense-snapshot #:memdict-load-sense-snapshot
@@ -22,23 +21,17 @@
            #:memdict-set-restricted-readings #:memdict-restricted-readings
            #:memdict-restricted-readings-loaded-p
            #:memdict-reset #:memdict-loaded-tables
-           ;; R6 residual-query helpers (reading-str/short-sense/conj lists)
            #:memdict-text-by-seq #:memdict-find-by-seq-text
            #:memdict-rows-by-seq #:memdict-select-conjs #:memdict-conj-props
            #:memdict-short-sense-str #:memdict-normalize-order
-           ;; R6 trie-in-core
            #:memdict-build-trie #:memdict-trie #:*trie*
-           ;; R6 counters (scalar queries; DAO-row readings stay on DB)
            #:memdict-counter-ids #:memdict-counter-stags
-           ;; R6b: row accessors API consumers may need (uk/conj paths)
            #:compact-kana-id #:compact-kanji-id
            #:compact-conj-id #:compact-conj-seq #:compact-conj-from #:compact-conj-via
            #:compact-sense-prop-id #:compact-sense-prop-sense-id #:compact-sense-prop-seq
-           ;; R7 integer backend registry
            #:int-register-text-table #:int-table-loaded-p #:*int-tables*
            #:memdict-query-parents
            #:memdict-load-int #:*int-backed-tables*
-           ;; R8/Tier 0: remaining serving-path query mirrors
            #:memdict-find-with-pos #:memdict-text-rows-by-text
            #:memdict-find-by-words-seqs
            #:memdict-conj-ids-by-seq-from #:memdict-seq-has-pos-p
@@ -100,7 +93,7 @@
 (defstruct compact-entry
   seq content (root-p nil) (n-kanji 0) (n-kana 0) (primary-nokanji nil))
 
-;; R5: sense/gloss/sense-prop compact structs for the full in-RAM dict.
+;; sense/gloss/sense-prop compact structs for the full in-RAM dict.
 (defstruct compact-sense
   id seq ord)
 (defstruct compact-gloss
@@ -119,7 +112,7 @@
 (defvar *conj-prop-by-id* (make-hash-table :test 'eql))
 (defvar *csr-by-id* (make-hash-table :test 'eql))
 (defvar *entry-by-seq* (make-hash-table :test 'eql))
-;; R5: full-dict indexes
+;; full-dict indexes
 (defvar *sense-by-seq* (make-hash-table :test 'eql) "seq -> list of compact-sense")
 (defvar *gloss-by-sense* (make-hash-table :test 'eql) "sense-id -> list of compact-gloss")
 (defvar *prop-by-sense* (make-hash-table :test 'eql) "sense-id -> list of compact-sense-prop")
@@ -367,7 +360,7 @@
 
 ;;; ---- accessors (return compact structs; NIL if missing) ----
 
-;;; ---- R6b: copy-on-return (analyzer mutates readings) ----
+;;; ---- copy-on-return (analyzer mutates readings) ----
 ;;; The analyzer setfs word-conjugations/hintedp on readings and nconcs
 ;;; find-word results (find-word-full). Returning aliased index lists or
 ;;; shared structs would corrupt the RAM dict across sentences (measured:
@@ -387,7 +380,7 @@
   "Fresh list spine AND fresh row copies."
   (mapcar 'memdict-copy-row rows))
 
-;;; ---- R7: integer-table backend (src/memdict-int.lisp) ----
+;;; ---- integer-table backend (src/memdict-int.lisp) ----
 ;;; (*int-tables* is defvarred above memdict-reset, which clears it.)
 ;;; When an integer table is registered for kana_text/kanji_text, struct-path
 ;;; lookups decode from it (fresh structs every call: copy-on-return is free).
@@ -556,7 +549,7 @@
 (defun memdict-conj-source-reading (conj-id) (gethash conj-id *csr-by-id*))
 (defun memdict-entry (seq) (gethash seq *entry-by-seq*))
 
-;;; ---- R5: RAM lookups mirroring the analyzer's DB queries ----
+;;; ---- RAM lookups mirroring the analyzer's DB queries ----
 ;;; These return data in the same shape the DB queries return, so the
 ;;; analyzer can serve them from RAM behind *memdict-p* with identical
 ;;; behavior.
@@ -699,8 +692,8 @@
     (when rows
       (compact-kana-text (car rows)))))
 
-;;; ---- R6: residual-query helpers (reading-str / short-sense / conj lists) ----
-;;; These serve the queries the R5 wiring left on the DB (see query-log
+;;; ---- residual-query helpers (reading-str / short-sense / conj lists) ----
+;;; These serve the queries the RAM wiring left on the DB (see query-log
 ;;; enumeration): reading-str-seq (2/word), select-conjs, short-sense-str,
 ;;; get-original-text's seq+text probes. Table-parameterized helpers self-gate
 ;;; on *loaded-tables* (kana-only cores must still serve kana sides).
@@ -906,7 +899,7 @@
         (when it (funcall (int-fn 'int-has-conj-p) it seq)))
       (not (null (gethash seq *conj-by-seq*)))))
 
-;;; ---- R6: counter helpers (pure scalars; no DAO shapes) ----
+;;; ---- counter helpers (pure scalars; no DAO shapes) ----
 ;;; get-counter-ids / get-counter-stags fire per-process (cached by `ensure`)
 ;;; but each costs IN-queries over sense_prop. The readings query stays on the
 ;;; DB (batched, once per process, DAO-shaped rows).
@@ -955,7 +948,7 @@
                *prop-by-sense*)
       (cons stagks stagrs))))
 
-;;; ---- R6: trie-in-core ----
+;;; ---- trie-in-core ----
 ;;; The serving core can bake a compact character trie over the RAM text keys
 ;;; so per-sentence substring seeding only probes valid dict prefixes (see
 ;;; ichiran/dict::find-substring-words-ram-seed). No hard dependency: the
@@ -1063,7 +1056,7 @@
                         (sort (copy-list (gethash (compact-conj-id conj) *conj-prop-by-id*))
                               '< :key 'compact-conj-prop-id))))))
 
-;;; ---- R7: conjugation parent lookup (mirror of query-parents-kanji/kana) ----
+;;; ---- conjugation parent lookup (mirror of query-parents-kanji/kana) ----
 ;;; best-kana-conj / best-kanji-conj resolve a conjugated form's reading by
 ;;; walking to the *parent* dictionary entry. The DB queries join
 ;;; kanji_text/kana_text with conj_source_reading and conjugation; these
@@ -1096,7 +1089,7 @@
                           (push (list (compact-kana-id row) cid) found))))))))))
         (nreverse found)))))
 
-;;; ---- R7: integer-backend bulk loader ----
+;;; ---- integer-backend bulk loader ----
 ;;; Loads the memory-tight tables through src/memdict-int.lisp and registers
 ;;; them, so the serving core can combine the integer layer (text/entry/conj)
 ;;; with compact hash tables for whatever is not integer-backed yet
@@ -1199,7 +1192,7 @@
                      internal-time-units-per-second)))))
     (values total (nreverse sizes))))
 
-;;; ---- R8/Tier 0: remaining serving-path query mirrors ----
+;;; ---- remaining serving-path query mirrors ----
 ;;; Each mirrors one prepared query the analyzer still issues per candidate
 ;;; word. All self-gate on *loaded-tables*, so partial loads keep the DB path.
 
@@ -1314,7 +1307,7 @@
           (add (memdict-rows-by-seq 'kana-text other))))
       (nreverse out))))
 
-;;; ---- R8/Tier 0.6: sense-ord probe, conj counts, remaining probes ----
+;;; ---- .6: sense-ord probe, conj counts, remaining probes ----
 
 (defvar *sense-ids-ord-0* nil
   "Hash set of sense ids whose ord is 0, built lazily from loaded senses.")
