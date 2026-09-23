@@ -505,18 +505,19 @@
           (loop for i from 0 below n
                 do (setf (aref direct (aref seq-vec i)) i))
           (sb-ext:gc :full t)
+          (multiple-value-bind (contents-blob content-off) (pool-encode contents)
           (let ((after (sb-kernel:dynamic-usage)))
             (values (list :n n
                           :seqs seq-vec
-                          :contents (let ((out (make-array (fill-pointer contents))))
-                                      (replace out contents))
+                          :contents contents-blob
+                          :content-offsets content-off
                           :content-ids (funcall freeze content-ids '(unsigned-byte 32))
                           :flags (funcall freeze flags '(unsigned-byte 8))
                           :nkanji (funcall freeze nkanji '(unsigned-byte 32))
                           :nkana (funcall freeze nkana '(unsigned-byte 32))
                           :direct direct
                           :max-seq max-seq)
-                     (- after before)))))))
+                     (- after before))))))))
 
 (defun int-entry-row-count (table)
   (getf table :n))
@@ -528,8 +529,9 @@
       (when (>= i 0)
         (let ((fl (aref (getf table :flags) i)))
           (list :seq seq
-                :content (aref (getf table :contents)
-                               (aref (getf table :content-ids) i))
+                :content (pool-ref (getf table :contents)
+                                   (getf table :content-offsets)
+                                   (aref (getf table :content-ids) i))
                 :root-p (plusp (logand fl 1))
                 :n-kanji (aref (getf table :nkanji) i)
                 :n-kana (aref (getf table :nkana) i)

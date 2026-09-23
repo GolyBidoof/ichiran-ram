@@ -35,7 +35,7 @@
 (defparameter *magic* "ICHSNAP1"
   "8-byte file magic.")
 
-(defparameter *version* 4)
+(defparameter *version* 5)
 
 (defparameter *elem-types*
   '((unsigned-byte 8) (unsigned-byte 32) (signed-byte 32) fixnum)
@@ -53,7 +53,8 @@
     max-seq))
 
 (defparameter *plist-fields*
-  '(("entry" :n :seqs :contents :content-ids :flags :nkanji :nkana :direct :max-seq)
+  '(("entry" :n :seqs :contents :content-offsets :content-ids :flags :nkanji
+             :nkana :direct :max-seq)
     ("conjugation" :n :ids :seqs :froms :vias :major :major-from)
     ("conj_prop" :n :ids :conj-ids :types :type-ids :poss :pos-ids :flags :major)
     ("conj_source_reading" :n :ids :conj-ids :texts :text-offsets
