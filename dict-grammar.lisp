@@ -507,7 +507,19 @@
 (pushnew (cons :sa
                (lambda (matches)
                  (let ((seqs (loop for match in matches if (seq match) collect it)))
-                   (and seqs (query (:select 'seq :from 'entry :where (:and (:in 'seq (:set seqs)) 'root-p)) :column)))))
+                   (if (memdict-table-loaded-p "entry")
+                       ;; R9: answer from the in-RAM entry table. This was the
+                       ;; last raw SQL left on the serving path for ordinary
+                       ;; input (おかえりなさい reaches :sa through match-unique),
+                       ;; and because it returns the same rows the database
+                       ;; would, nothing that compares output could see it:
+                       ;; it only ever showed up as time.
+                       (loop for seq in seqs
+                             for entry = (memdict-call 'memdict-entry-by-seq seq)
+                             when (and entry (root-p entry)) collect seq)
+                       (and seqs (query (:select 'seq :from 'entry
+                                                 :where (:and (:in 'seq (:set seqs)) 'root-p))
+                                        :column))))))
          *suffix-unique-only*)
 
 (def-simple-suffix suffix-iadj :iadj (:connector "" :score 1) (root)
