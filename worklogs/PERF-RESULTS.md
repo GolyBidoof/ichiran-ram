@@ -91,3 +91,97 @@ Startup is now small enough that no single remaining piece dominates:
   run. The hotpath audit puts `get-seg-splits` at 43% of allocation; the split
   representation is still cons lists, and flattening it is the next real win.
   `apply-segfilters` already returns early once nothing survives.
+
+## Zero-database core
+
+A baked core no longer needs PostgreSQL at all. Measured with the server
+stopped: all 382 golden lines analyze, serialize and open no connections, and
+the JSON is byte-identical to the database-backed reference. With the server
+running `scripts/ram-parity.sh` reports RAM_PARITY_OK.
+
+Finding the remaining connections was the hard part, because `dict-segment` and
+friends are compiled with `(speed 3)` and the connecting caller is inlined away,
+so the socket error appeared to come from `dict-segment` itself with no frames
+above it. Intercepting `open-database` located each one:
+
+  * the `:is-arch` cache is built by SQL and `calc-score` consults it for every
+    candidate through `is-arch`, and nothing else ever populated it. Warming it
+    at build time (which also bakes the suffix cache, 5532 entries) removed it;
+  * `word-info-str`, `get-kanji-words` and `find-word-info` opened connections
+    directly and now use `with-dict-connection`;
+  * `exists-reading` was a bare query with no gate and now reads from RAM;
+  * `restricted_readings` is not a resident table, so a core that never calls
+    `load-dictionary` never installed it. That left
+    `ram-restricted-readings-available-p` false and sent every restricted sense
+    back to SQL, which failed on lines as ordinary as いただきます. The fetch
+    moved into `load-restricted-readings` and the build bakes it too (2745
+    seqs), passing the connection spec explicitly because the build binds none.
+
+One more trap: the compact text hashes still exist under the integer backend,
+they are simply never filled, so testing `(boundp '*kana-by-text*)` selected an
+empty hash. The check has to be for a non-empty one.
+
+## Baked prefix trie: implemented, measured, rejected
+
+The trie builder read `*kana-by-text*`, which the integer backend never fills,
+so every trie ever built was empty: 0 texts, 1 node, reported as success in
+0.1s. It now walks the encoded text pool instead. Two further traps: the pool
+holds the DISTINCT texts while the table's `n` slot is its row count, so
+driving the loop from `n` ran off the end of the offsets array.
+
+The fixed trie builds for real: 8411392 texts, 13303350 nodes. It is not shipped,
+because it does not pay:
+
+| line | no trie | trie |
+| --- | --- | --- |
+| 一日本漫画家協会 | 0.490 ms | 0.492 ms |
+| 聖杯戦争。 | 0.168 ms | 0.212 ms |
+| いただきます | 0.762 ms | 0.876 ms |
+
+It also needs more heap than the core is saved with, and died with
+HEAP-EXHAUSTED at the default dynamic space. The reason is that candidate
+windows are nearly all valid prefixes in these dictionaries, so there is nothing
+for a prefix index to prune. The code stays, off by default and behind
+`TRIE_TABLES`, but no trie core is shipped.
+
+## 350k character magazine
+
+18939 lines, 335008 characters, average 17.7, longest 170, and heavily mixed:
+169k hiragana, 82k kanji, 38k katakana, 22.5k punctuation, 20.9k Latin and 19.9k
+fullwidth, with the OCR and Latin noise the corpus was chosen for.
+
+    SERIAL   lines=18939 wall=19429.6ms ms/line=1.026
+             p50=0.808 p90=1.944 p95=2.768 p99=5.690 max=21.931
+             GC 136.5ms, 688.3kB consed per line
+    PARALLEL workers=10 wall=2577.3ms ms/line=0.136
+             speedup=9.97x efficiency=99.7% skew=1.00x errors=0 cache=99%
+
+The slowest lines are now simply the longest ones, 119 to 148 characters. The
+two shapes that used to be pathological are not any more: 一日本漫画家協会 is
+0.490 ms, down from 26.7 ms, and 聖杯戦争。 is 0.168 ms, down from 31 ms. Both
+are explained by the caching work, not by the trie.
+
+Cached profile, inclusive:
+
+    JOIN-SUBSTRING-WORDS     60.8%
+    JOIN-SUBSTRING-WORDS*    45.4%
+    FIND-BEST-PATH           26.6%
+    FIND-SUBSTRING-WORDS     23.5%
+    FIND-WORD-FULL           20.3%   98.5 calls/line
+    GET-SEG-SPLITS           14.8%   130.1 calls/line
+    GEN-SCORE                14.3%   128.5 calls/line
+    CALC-SCORE               11.3%   13.1 calls/line
+    FILL-SEGMENT-PATH         7.5%
+
+The per-worker `gen-score` cache does its job: `CALC-SCORE` falls from 130
+calls per line uncached to 13.1 cached.
+
+## What is left, revised
+
+- Candidate generation is 60.8% and is the only large block left. It is 1.87M
+  dictionary lookups for 335k characters, about eleven per character, and that
+  is structural rather than wasteful.
+- GC is 0.7% of serial wall, so allocation is not worth chasing by itself,
+  even though the run conses 688kB per line.
+- The longest lines cost about 2.4x more per character than the average, so the
+  remaining super-linear term sits in candidate count times path search.

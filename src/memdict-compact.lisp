@@ -949,14 +949,23 @@
                      (and (boundp '*kana-by-text*) *kana-by-text*))
                     ((equal table "kanji_text")
                      (and (boundp '*kanji-by-text*) *kanji-by-text*)))))
-    (if hash
+    ;; The hash must be BOTH bound and non-empty. Under the integer backend the
+    ;; compact hashes still exist, they are simply never filled, so testing for
+    ;; the binding alone selected an empty hash and returned no keys at all.
+    (if (and hash (plusp (hash-table-count hash)))
         (loop for k being the hash-keys of hash collect k)
         (let ((tbl (gethash table *int-tables*)))
           (when tbl
-            (let ((nfn (int-fn 'int-text-table-n))
-                  (sfn (int-fn 'int-text-pool-string)))
-              (loop for i below (funcall nfn tbl)
-                    collect (funcall sfn tbl i))))))))
+            ;; The pool holds the DISTINCT texts, while the table's N slot is its
+            ;; row count, so driving the loop from N ran off the end of the
+            ;; offsets array (pool-ref indexes off[i] and off[i+1]). The encoded
+            ;; pool carries one more offset than it has entries, which is the
+            ;; size to use.
+            (let ((sfn (int-fn 'int-text-pool-string))
+                  (offn (int-fn 'int-text-table-text-offsets)))
+              (let ((off (funcall offn tbl)))
+                (loop for i below (1- (length off))
+                      collect (funcall sfn tbl i)))))))))
 
 (defun memdict-build-trie (&key (tables '("kana_text" "kanji_text")))
   "Build the compact trie over the RAM text keys of TABLES and store it in
