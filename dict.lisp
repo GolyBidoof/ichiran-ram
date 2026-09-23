@@ -522,19 +522,40 @@
       (memdict-call 'memdict-query-parents "kana_text" seq text)
       (query-parents-kana-db seq text)))
 
+(defun csr-texts (cid src)
+  "Readings TEXT for conjugation CID whose source text is SRC. RAM when the
+   conj_source_reading table is loaded, else the DB probe."
+  (if (memdict-table-loaded-p "conj_source_reading")
+      (memdict-call 'memdict-csr-texts cid src)
+      (query (:select 'text :from 'conj-source-reading
+                      :where (:and (:= 'conj-id cid) (:= 'source-text src)))
+             :column)))
+
+(defun text-row-by-id (class id)
+  "Text row by primary key: RAM when the integer table is loaded, else get-dao.
+   Used by the conjugation parent walk, which otherwise pays a DB round trip
+   per parent candidate."
+  (or (when (memdict-table-loaded-p (if (eq class 'kanji-text) "kanji_text" "kana_text"))
+        (memdict-call 'memdict-text-row-by-id
+                      (if (eq class 'kanji-text) "kanji_text" "kana_text") id))
+      (get-dao class id)))
+
+(defun entry-by-seq-or-dao (seq)
+  "Entry row by seq: RAM when the entry table is loaded, else get-dao."
+  (or (when (memdict-table-loaded-p "entry")
+        (memdict-call 'memdict-entry-by-seq seq))
+      (get-dao 'entry seq)))
+
 (defun best-kana-conj (obj &aux (wc (word-conjugations obj)))
   (cond ((and (or (not wc) (eql wc :root))
               (not (eql (best-kana obj) :null)))
          (best-kana obj))
         (t (let* ((parents (query-parents-kanji (seq obj) (text obj))))
              (loop for (pid cid) in parents
-                  for parent-kt = (get-dao 'kanji-text pid)
+                  for parent-kt = (text-row-by-id 'kanji-text pid)
                   for parent-bk = (best-kana-conj parent-kt)
                   unless (or (eql parent-bk :null) (and wc (or (eql wc :root) (not (find cid wc)))))
-                  do (let ((readings (query (:select 'text :from 'conj-source-reading
-                                                     :where (:and (:= 'conj-id cid)
-                                                                  (:= 'source-text parent-bk)))
-                                            :column)))
+                  do (let ((readings (csr-texts cid parent-bk)))
                        (when readings
                          (return
                            (if (= (length readings) 1)
@@ -553,16 +574,13 @@
   (cond ((and (or (not wc) (eql wc :root))
               (not (eql (best-kanji obj) :null)))
          (best-kanji obj))
-        ((or (nokanji obj) (= (n-kanji (get-dao 'entry (seq obj))) 0))
+        ((or (nokanji obj) (= (n-kanji (entry-by-seq-or-dao (seq obj))) 0))
          :null)
         (t (let* ((parents (query-parents-kana (seq obj) (text obj))))
              (loop for (pid cid) in parents
-                  for parent-bk = (best-kanji-conj (get-dao 'kana-text pid))
+                  for parent-bk = (best-kanji-conj (text-row-by-id 'kana-text pid))
                   unless (or (eql parent-bk :null) (and wc (or (eql wc :root) (not (find cid wc)))))
-                  do (let* ((readings (query (:select 'text :from 'conj-source-reading
-                                                     :where (:and (:= 'conj-id cid)
-                                                                  (:= 'source-text parent-bk)))
-                                            :column))
+                  do (let* ((readings (csr-texts cid parent-bk))
                             (matching-readings
                              (some (lambda (reading) (and (kanji-match reading (text obj)) reading))
                                    readings)))
@@ -1342,6 +1360,14 @@
     ("memdict-senses-raw" "sense" "gloss" "sense_prop")
     ("memdict-conj-data" "conjugation" "conj_prop" "conj_source_reading")
     ("memdict-has-conj-p" "conjugation")
+    ;; R8/Tier 0 self-gating helpers (partial loads keep the DB path)
+    ("memdict-find-with-pos")
+    ("memdict-text-rows-by-text")
+    ("memdict-conj-ids-by-seq-from")
+    ("memdict-text-row-by-id")
+    ("memdict-csr-texts")
+    ("memdict-kana-forms")
+    ("memdict-conj-seqs-from")
     ("memdict-find" "kana_text")
     ;; R6 residual helpers self-gate on *loaded-tables* inside (they serve
     ;; per-side/partial loads, e.g. kana-only cores), so no gate here.

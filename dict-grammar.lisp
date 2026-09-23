@@ -18,12 +18,14 @@
 
 (defun get-kana-forms* (seq)
   (loop for kt in
-       (query-dao 'kana-text
-                  (:union
-                   (:select 'kt.* :from (:as 'kana-text 'kt) :where (:= 'kt.seq seq))
-                   (:select 'kt.* :from (:as 'kana-text 'kt)
-                            :left-join (:as 'conjugation 'conj) :on (:= 'conj.seq 'kt.seq)
-                            :where (:= 'conj.from seq))))
+       (if (memdict-table-loaded-p "kana_text" "conjugation")
+           (memdict-call 'memdict-kana-forms seq)
+           (query-dao 'kana-text
+                      (:union
+                       (:select 'kt.* :from (:as 'kana-text 'kt) :where (:= 'kt.seq seq))
+                       (:select 'kt.* :from (:as 'kana-text 'kt)
+                                :left-join (:as 'conjugation 'conj) :on (:= 'conj.seq 'kt.seq)
+                                :where (:= 'conj.from seq)))))
        if (= (seq kt) seq)
        do (setf (word-conjugations kt) :root) and collect kt
        else if (let ((conj-ids (get-kana-forms-conj-data-filter (get-conj-data (seq kt) seq))))
@@ -73,8 +75,15 @@
        finally (return (alexandria:hash-table-values bag)))))
 
 (defun find-word-seq (word &rest seqs)
-  (let ((table (if (test-word word :kana) 'kana-text 'kanji-text)))
-    (select-dao table (:and (:= 'text word) (:in 'seq (:set seqs))))))
+  ;; R8/Tier 0: serve from RAM when the text table is loaded (id-ascending,
+  ;; matching select-dao's natural key order).
+  (let* ((kana-p (test-word word :kana))
+         (table (if kana-p 'kana-text 'kanji-text))
+         (tname (if kana-p "kana_text" "kanji_text")))
+    (if (memdict-table-loaded-p tname)
+        (loop for row in (memdict-call 'memdict-text-rows-by-text tname word)
+              when (member (seq row) seqs :test '=) collect row)
+        (select-dao table (:and (:= 'text word) (:in 'seq (:set seqs)))))))
 
 (defun find-word-conj-of (word &rest seqs)
   (union
@@ -87,12 +96,18 @@
    :key #'id))
 
 (defun find-word-with-pos (word &rest posi)
-  (let ((table (if (test-word word :kana) 'kana-text 'kanji-text)))
-    (query-dao table (:select 'kt.* :distinct :from (:as table 'kt)
-                              :inner-join (:as 'sense-prop 'sp) :on (:and (:= 'sp.seq 'kt.seq)
-                                                                          (:= 'sp.tag "pos"))
-                              :where (:and (:= 'kt.text word)
-                                           (:in 'sp.text (:set posi)))))))
+  ;; R8/Tier 0: mirror the posi join from RAM (distinct by id) when both the
+  ;; text table and sense_prop are loaded; else the DB join.
+  (let* ((kana-p (test-word word :kana))
+         (table (if kana-p 'kana-text 'kanji-text))
+         (tname (if kana-p "kana_text" "kanji_text")))
+    (if (memdict-table-loaded-p tname "sense_prop")
+        (memdict-call 'memdict-find-with-pos tname word posi)
+        (query-dao table (:select 'kt.* :distinct :from (:as table 'kt)
+                                  :inner-join (:as 'sense-prop 'sp) :on (:and (:= 'sp.seq 'kt.seq)
+                                                                              (:= 'sp.tag "pos"))
+                                  :where (:and (:= 'kt.text word)
+                                               (:in 'sp.text (:set posi))))))))
 
 (defun or-as-hiragana (fn word &rest args)
   (let ((result (apply fn word args)))

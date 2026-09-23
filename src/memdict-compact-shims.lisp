@@ -202,3 +202,45 @@
   (compact-conj-prop-neg obj))
 (defmethod ichiran/dict::conj-fml ((obj compact-conj-prop))
   (compact-conj-prop-fml obj))
+
+;; ---- adjoin-word shims (suffix machinery makes compounds from readings) ----
+;; The DAO methods specialise on simple-text, but RAM lookups (find-word-with-pos,
+;; memdict-find, ...) return compact structs. Without these, building a compound
+;; from a RAM row signals no-primary-method. Bodies mirror the simple-text ones.
+
+(defun ram-adjoin-simple (word1 word2 text kana score-mod score-base)
+  (make-instance 'ichiran/dict::compound-text
+                 :text text :kana kana :primary word1 :words (list word1 word2)
+                 :score-mod score-mod :score-base score-base))
+
+(defun ram-adjoin-compound (word1 word2 text kana score-mod)
+  ;; Slot names must be qualified: with-slots interns them in this package
+  ;; otherwise, and compound-text's slots live in ichiran/dict.
+  (with-slots ((s-text ichiran/dict::text)
+               (s-kana ichiran/dict::kana)
+               (s-words ichiran/dict::words)
+               (s-score-mod ichiran/dict::score-mod))
+      word1
+    (setf s-text text s-kana kana
+          s-words (append s-words (list word2))
+          s-score-mod (funcall (if (listp s-score-mod) 'cons 'list) score-mod s-score-mod)))
+  word1)
+
+(macrolet ((def-ram-adjoin-simple (t1 t2)
+             `(defmethod ichiran/dict::adjoin-word ((w1 ,t1) (w2 ,t2)
+                                                    &key text kana score-mod score-base)
+                (ram-adjoin-simple w1 w2 text kana score-mod score-base)))
+           (def-ram-adjoin-compound (t2)
+             `(defmethod ichiran/dict::adjoin-word ((w1 ichiran/dict::compound-text) (w2 ,t2)
+                                                    &key text kana score-mod &allow-other-keys)
+                (ram-adjoin-compound w1 w2 text kana score-mod))))
+  (def-ram-adjoin-simple compact-kana compact-kana)
+  (def-ram-adjoin-simple compact-kana compact-kanji)
+  (def-ram-adjoin-simple compact-kanji compact-kana)
+  (def-ram-adjoin-simple compact-kanji compact-kanji)
+  (def-ram-adjoin-simple compact-kana ichiran/dict::simple-text)
+  (def-ram-adjoin-simple ichiran/dict::simple-text compact-kana)
+  (def-ram-adjoin-simple compact-kanji ichiran/dict::simple-text)
+  (def-ram-adjoin-simple ichiran/dict::simple-text compact-kanji)
+  (def-ram-adjoin-compound compact-kana)
+  (def-ram-adjoin-compound compact-kanji))

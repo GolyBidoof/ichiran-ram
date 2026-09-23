@@ -33,7 +33,12 @@
            ;; R7 integer backend registry
            #:int-register-text-table #:int-table-loaded-p #:*int-tables*
            #:memdict-query-parents
-           #:memdict-load-int #:*int-backed-tables*))
+           #:memdict-load-int #:*int-backed-tables*
+           ;; R8/Tier 0: remaining serving-path query mirrors
+           #:memdict-find-with-pos #:memdict-text-rows-by-text
+           #:memdict-conj-ids-by-seq-from #:memdict-seq-has-pos-p
+           #:memdict-text-row-by-id #:memdict-csr-texts
+           #:memdict-kana-forms #:memdict-conj-seqs-from))
 
 (in-package #:ichiran/memdict-compact)
 
@@ -361,6 +366,12 @@
 ;;; When an integer table is registered for kana_text/kanji_text, struct-path
 ;;; lookups decode from it (fresh structs every call: copy-on-return is free).
 ;;; Text-only probes go straight to the integer index (no decode).
+
+(defun memdict-tables-loaded-p (&rest tables)
+  "T when every table in TABLES is loaded. Local multi-table form of
+   memdict-table-loaded-p (the ichiran/dict wrapper of the same name is a
+   different function)."
+  (loop for table in tables always (memdict-table-loaded-p table)))
 
 (defun int-table-loaded-p (table)
   "T when an integer table is registered for TABLE (underscored name)."
@@ -899,3 +910,118 @@
                     (/ (- (get-internal-real-time) start)
                        internal-time-units-per-second))))))
     (values total (nreverse sizes))))
+
+;;; ---- R8/Tier 0: remaining serving-path query mirrors ----
+;;; Each mirrors one prepared query the analyzer still issues per candidate
+;;; word. All self-gate on *loaded-tables*, so partial loads keep the DB path.
+
+(defun md-row-seq (row)
+  "SEQ of a compact-kana/compact-kanji row."
+  (if (compact-kana-p row) (compact-kana-seq row) (compact-kanji-seq row)))
+
+(defun md-row-id (row)
+  "ID of a compact-kana/compact-kanji row."
+  (if (compact-kana-p row) (compact-kana-id row) (compact-kanji-id row)))
+
+(defun memdict-seq-has-pos-p (seq posi)
+  "T when SEQ has a sense_prop with tag \"pos\" and text in POSI."
+  (loop for sense in (gethash seq *sense-by-seq*)
+        thereis (loop for p in (gethash (compact-sense-id sense) *prop-by-sense*)
+                      thereis (and (equal (compact-sense-prop-tag p) "pos")
+                                   (member (compact-sense-prop-text p) posi
+                                           :test 'equal)))))
+
+(defun memdict-find-with-pos (table-name word posi)
+  "RAM mirror of ichiran/dict::find-word-with-pos: rows of TABLE-NAME whose
+   TEXT is WORD and whose seq carries a pos sense_prop with text in POSI.
+   Distinct by id, since the DB selects DISTINCT across the sense_prop join.
+   NIL unless the text table and sense_prop are loaded."
+  (when (and (memdict-table-loaded-p "sense_prop")
+             (memdict-table-loaded-p table-name))
+    (let ((rows (if (search "kanji" table-name)
+                    (memdict-find 'kanji-text word)
+                    (memdict-find 'kana-text word)))
+          (seen (make-hash-table :test 'eql))
+          (out nil))
+      (dolist (row rows)
+        (let ((id (md-row-id row)))
+          (when (and (not (gethash id seen))
+                     (memdict-seq-has-pos-p (md-row-seq row) posi))
+            (setf (gethash id seen) t)
+            (push row out))))
+      (nreverse out))))
+
+(defun memdict-text-rows-by-text (table-name word)
+  "Rows of TABLE-NAME whose TEXT is WORD (DB select-dao by text order: id).
+   NIL unless TABLE-NAME is loaded."
+  (when (memdict-table-loaded-p table-name)
+    (let ((rows (if (search "kanji" table-name)
+                    (memdict-find 'kanji-text word)
+                    (memdict-find 'kana-text word))))
+      (sort rows '< :key #'md-row-id))))
+
+(defun memdict-conj-ids-by-seq-from (seq from)
+  "RAM mirror of the (SELECT id FROM conjugation WHERE seq IN (...) AND
+   \"from\" = ...) probe: ids of conjugation rows for SEQ whose from is FROM."
+  (when (memdict-table-loaded-p "conjugation")
+    (loop for (id nil row-from nil)
+          in (or (let ((it (gethash "conjugation" *int-tables*)))
+                   (when it (funcall (int-fn 'int-conj-rows-by-seq) it seq)))
+                 (loop for c in (gethash seq *conj-by-seq*)
+                       collect (list (compact-conj-id c) (compact-conj-seq c)
+                                     (compact-conj-from c) (compact-conj-via c))))
+          when (eql row-from from) collect id)))
+
+(defun memdict-text-row-by-id (table-name id)
+  "RAM text row for primary key ID in TABLE-NAME, or NIL. Integer backend
+   only: compact cores keep using get-dao (they have no id index)."
+  (let ((it (gethash table-name *int-tables*)))
+    (when it
+      (let ((pl (funcall (int-fn 'int-text-by-id) it id)))
+        (when pl
+          ;; kana-p: kana_table rows decode to compact-kana, kanji rows to
+          ;; compact-kanji.
+          (decode-int-row (not (search "kanji" table-name)) pl))))))
+
+(defun memdict-csr-texts (conj-id source-text)
+  "RAM mirror of (SELECT text FROM conj_source_reading WHERE conj_id = ?
+   AND source_text = ?), in id order. NIL unless the table is loaded."
+  (when (memdict-table-loaded-p "conj_source_reading")
+    (let ((it (gethash "conj_source_reading" *int-tables*)))
+      (if it
+          (loop for (text src) in (funcall (int-fn 'int-csr-by-id) it conj-id)
+                when (equal src source-text) collect text)
+          (loop for r in (sort (copy-list (gethash conj-id *csr-by-id*))
+                               '< :key 'compact-csr-id)
+                when (equal (compact-csr-source-text r) source-text)
+                  collect (compact-csr-text r))))))
+
+(defun memdict-conj-seqs-from (from)
+  "SEQ values whose conjugation has \"from\" = FROM (id order). NIL unless the
+   conjugation table is loaded."
+  (when (memdict-table-loaded-p "conjugation")
+    (let ((it (gethash "conjugation" *int-tables*)))
+      (if it
+          (funcall (int-fn 'int-conj-seqs-by-from) it from)
+          (loop for c in (sort (copy-list (gethash from *conj-by-from*))
+                               '< :key 'compact-conj-id)
+                collect (compact-conj-seq c))))))
+
+(defun memdict-kana-forms (seq)
+  "RAM mirror of ichiran/dict::get-kana-forms*'s UNION: kana_text rows for SEQ
+   plus kana_text rows for seqs that have a conjugation whose \"from\" is SEQ,
+   deduped by id (SQL UNION dedupes identical rows; kana rows are unique by id).
+   NIL unless kana_text and conjugation are loaded."
+  (when (memdict-tables-loaded-p "kana_text" "conjugation")
+    (let ((seen (make-hash-table :test 'eql))
+          (out nil))
+      (flet ((add (rows)
+               (dolist (r rows)
+                 (let ((id (md-row-id r)))
+                   (unless (gethash id seen)
+                     (setf (gethash id seen) t)
+                     (push r out))))))
+        (add (memdict-rows-by-seq 'kana-text seq))
+        (dolist (other (memdict-conj-seqs-from seq))
+          (add (memdict-rows-by-seq 'kana-text other))))
+      (nreverse out))))

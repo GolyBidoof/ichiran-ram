@@ -18,10 +18,10 @@
   (:export #:int-load-text #:int-text-by-seq #:int-text-find
            #:int-text-row-count #:int-text-table-p
            #:int-text-row #:int-text-find-rows #:int-text-rows-by-seq
-           #:int-text-find-by-seq
+           #:int-text-find-by-seq #:int-text-by-id
            #:int-load-entry #:int-entry-by-seq #:int-entry-row-count
            #:int-load-conjugation #:int-conj-row-count
-           #:int-has-conj-p #:int-conj-rows-by-seq
+           #:int-has-conj-p #:int-conj-rows-by-seq #:int-conj-seqs-by-from
            #:int-load-conj-prop #:int-conj-prop-row-count #:int-conj-props-by-id
            #:int-load-csr #:int-csr-row-count #:int-csr-by-id
            #:make-int-text-table))
@@ -231,6 +231,20 @@
                                     (aref (int-text-table-kana-ids table) row))))
                        (if (equal b "") nil b))))
 
+(defun int-text-by-id (table id)
+  "Decoded row plist for primary key ID, or NIL. IDS is ascending (loaded
+   ORDER BY id) so this is a binary search; ids have gaps, so a direct
+   id-1 index would be wrong."
+  (let ((ids (int-text-table-ids table)))
+    (loop with lo = 0
+          with hi = (1- (length ids))
+          while (<= lo hi)
+          for mid = (ash (+ lo hi) -1)
+          for v = (aref ids mid)
+          do (cond ((= v id) (return (int-text-row table mid)))
+                   ((< v id) (setf lo (1+ mid)))
+                   (t (setf hi (1- mid)))))))
+
 (defun int-text-find-rows (table text)
   "List of decoded row plists for TEXT in id order. NIL if none."
   (multiple-value-bind (ti found) (gethash text (int-text-table-text-index table))
@@ -424,13 +438,21 @@
         (let ((major (int-sort-positions
                       n (lambda (i) (+ (ash (aref seqs-v i) 32)
                                        (aref ids-v i))))))
-          (sb-ext:gc :full t)
-          (let ((after (sb-kernel:dynamic-usage)))
-            (values (list :n n :ids ids-v :seqs seqs-v :froms froms-v
-                          :vias vias-v :major major
-                          :by-seq (int-group-ranges
-                                   major n (lambda (r) (aref seqs-v r))))
-                    (- after before))))))))
+          ;; Second permutation by "from" so a source word can find its
+          ;; conjugated rows without a scan (get-kana-forms* needs this).
+          (let ((major-from (int-sort-positions
+                             n (lambda (i) (+ (ash (aref froms-v i) 32)
+                                              (aref ids-v i))))))
+            (sb-ext:gc :full t)
+            (let ((after (sb-kernel:dynamic-usage)))
+              (values (list :n n :ids ids-v :seqs seqs-v :froms froms-v
+                            :vias vias-v :major major
+                            :by-seq (int-group-ranges
+                                     major n (lambda (r) (aref seqs-v r)))
+                            :major-from major-from
+                            :by-from (int-group-ranges
+                                      major-from n (lambda (r) (aref froms-v r))))
+                      (- after before)))))))))
 
 (defun int-conj-row-count (table)
   (getf table :n))
@@ -449,6 +471,14 @@
                           (aref (getf table :froms) i)
                           (let ((v (aref (getf table :vias) i)))
                             (if (= v -1) nil v)))))))
+
+(defun int-conj-seqs-by-from (table from)
+  "List of conjugation SEQ values whose \"from\" is FROM, in id order."
+  (let ((range (gethash from (getf table :by-from))))
+    (when range
+      (loop for k from (car range) below (+ (car range) (cdr range))
+            for i = (aref (getf table :major-from) k)
+            collect (aref (getf table :seqs) i)))))
 
 (defun int-load-conj-prop (&key (chunk 200000) conn)
   "Load conj_prop (id conj-id type pos neg fml). ORDER BY id."
