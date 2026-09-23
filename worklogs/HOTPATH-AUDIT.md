@@ -219,3 +219,45 @@ These do not change output and can be done mechanically, in this order:
   per line is roughly 56KB of headers. Small next to 6.26MB, but it disappears
   for free once splits carry `(start . end)` integers instead of slice
   objects.
+
+## Startup: where the load actually goes (measured)
+
+The startup question was whether to serialize the Postgres sense layer into the
+snapshot or to build a mapped store. Measured on the golden corpus rather than
+argued:
+
+| phase | time | share |
+|---|---|---|
+| system load (cached fasls) | 3.07s | |
+| snapshot load | **7.31s** | **90% of the dictionary load** |
+| sense layer from PostgreSQL | 0.78s | 10% |
+
+and inside the snapshot load:
+
+| phase | time | share |
+|---|---|---|
+| decode (read + build vectors) | **6.14s** | **84%** |
+| rebuild derived indexes | 1.17s | 16% |
+
+Two conclusions:
+
+- **Serializing the sense layer buys about 0.8s.** It is worth doing for a
+  different reason, which is that it removes the PostgreSQL dependency from
+  serving, not for its speed.
+- **The load is decode-bound.** 1.6GB in 6.14s is 260MB/s, far below what this
+  disk does, so the cost is constructing millions of Lisp objects (the pool
+  strings and the column vectors), not the read syscalls. That is precisely the
+  work a zero-copy mapped store removes, which is the argument for doing mmap
+  properly rather than a partial version.
+
+`int-snapshot-load` prints this split to `*trace-output*`, so it does not have
+to be re-instrumented to be re-checked.
+
+## Gate coverage
+
+The corpus was 364 lines with **no suffix coverage at all**, which is why a
+suffixed compact row falling through `defsuffix`'s etypecase crashed the RAM
+path on 偽れない without any gate noticing. It is now 382 lines covering
+negative, polite, passive, causative, passive-causative, desiderative,
+conditional, imperative, prohibitive, obligative, preparatory and honorific
+forms, with the baseline regenerated from the database path.
