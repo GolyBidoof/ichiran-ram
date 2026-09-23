@@ -4,13 +4,14 @@
 # cost of STARTING is included) alongside the in-process numbers.
 cd "$(dirname "$0")/.." || exit 1
 CORPORA="${CORPORA:-data/golden-corpus.txt the visual-novel sample the visual-novel sample}"
+CORE="${CORE:-local-env/ichiran-serving.core}"
 echo "== corpus | path | wall-to-first-answer | best-of-3 | per-line =="
 for corpus in $CORPORA; do
   for mode in db ram core; do
     out="local-env/scratch/benchall-$mode-$(basename "$corpus" .txt).log"
     if [ "$mode" = core ]; then
       /usr/bin/time -p env MODE=core CORPUS="$corpus" ./scripts/sbcl-wrapped \
-        --core local-env/ichiran-serving.core --non-interactive \
+        --core "$CORE" --non-interactive \
         --load scripts/bench-core.lisp --eval '(main)' --eval '(sb-ext:quit)' > "$out" 2>&1
     else
       /usr/bin/time -p env MODE="$mode" CORPUS="$corpus" ./scripts/sbcl-wrapped \

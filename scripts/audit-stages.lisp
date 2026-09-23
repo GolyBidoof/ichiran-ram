@@ -42,7 +42,30 @@
          (incf ,t-var (- (now) t0))
          (incf ,b-var (- (consed) c0))))))
 
+(defun ensure-word-info-json-method ()
+  "The SYSTEM=1 core bakes :ichiran but not :ichiran/cli, and the method that
+   serializes a WORD-INFO into JSON lives in cli.lisp:52. Without it a baked
+   core cannot produce the JSON the daemon produces, and (jsown:to-json info)
+   signals NO-APPLICABLE-METHOD. Define it when absent so this audit can
+   measure the real serving path on the core as well as on the RAM path."
+  ;; FINAL argument is errorp; passing NIL makes FIND-METHOD return NIL rather
+  ;; than signal, so check the value. An earlier version wrapped this in
+  ;; HANDLER-CASE with errorp NIL and therefore never defined anything.
+  (unless (find-method #'jsown:to-json nil
+                       (list (find-class 'ichiran/dict:word-info)) nil)
+    (defmethod jsown:to-json ((wi ichiran/dict:word-info))
+      (jsown:to-json (ichiran/dict::word-info-gloss-json wi)))))
+
+(defun collect-wis (x)
+  "Every WORD-INFO reachable from a ROMANIZE* result. Entries are triples for
+   words but bare strings for gaps and punctuation, and compound words nest, so
+   this walks the structure instead of assuming a shape."
+  (cond ((typep x 'ichiran/dict:word-info) (list x))
+        ((consp x) (append (collect-wis (car x)) (collect-wis (cdr x))))
+        (t nil)))
+
 (defun main ()
+  (ensure-word-info-json-method)
   (let* ((path (or (uiop:getenv "CORPUS") "data/golden-corpus.txt"))
          (work (lines-of path))
          (n (length work)))
@@ -71,15 +94,13 @@
           ;; them and dispatches on each WORD-INFO. Timing the gloss tree on its
           ;; own gives the split: emission is t-json minus t-gjson.
           (stage info (setf info (ichiran:romanize* line :limit 5)))
-          (stage gjson
-            (dolist (entry info)
-              ;; Entries are (romanization word-info nil) for words but a bare
-              ;; string for gaps and punctuation, so the shape has to be
-              ;; checked rather than assumed.
-              (when (consp entry)
-                (let ((wi (second entry)))
-                  (when (typep wi 'ichiran/dict:word-info)
-                    (ichiran/dict::word-info-gloss-json wi))))))
+          ;; Collect first, outside the timed body: an earlier version looked
+          ;; only at (second entry) and silently matched nothing, so this stage
+          ;; reported zero and hid the real cost.
+          (let ((wis (collect-wis info)))
+            (stage gjson
+              (dolist (wi wis)
+                (ichiran/dict::word-info-gloss-json wi))))
           (stage json (jsown:to-json info))))
       (flet ((row (label t-acc b-acc)
                (format t "  ~24a ~8,1f ms  ~7,3f ms/line  ~8,1f MB  ~7,1f kB/line~%"
