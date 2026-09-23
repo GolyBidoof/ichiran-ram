@@ -35,7 +35,7 @@
 (defparameter *magic* "ICHSNAP1"
   "8-byte file magic.")
 
-(defparameter *version* 1)
+(defparameter *version* 2)
 
 (defparameter *elem-types*
   '((unsigned-byte 8) (unsigned-byte 32) (signed-byte 32) fixnum)
@@ -47,7 +47,7 @@
 ;;; ---- field layout per table -------------------------------------------
 
 (defparameter *text-table-slots*
-  '(n texts ids seqs ords text-ids commons flags tags tag-ids kanjis kanji-ids
+  '(n texts ids seqs ords ranks text-ids commons flags tags tag-ids kanjis kanji-ids
     kanas kana-ids text-major text-start text-count seq-major seq-start seq-count
     max-seq))
 

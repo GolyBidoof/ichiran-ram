@@ -36,6 +36,7 @@
            #:memdict-load-int #:*int-backed-tables*
            ;; R8/Tier 0: remaining serving-path query mirrors
            #:memdict-find-with-pos #:memdict-text-rows-by-text
+           #:memdict-find-by-words-seqs
            #:memdict-conj-ids-by-seq-from #:memdict-seq-has-pos-p
            #:memdict-text-row-by-id #:memdict-csr-texts
            #:memdict-kana-forms #:memdict-conj-seqs-from
@@ -702,6 +703,30 @@
                (loop for r in (gethash seq *kanji-by-seq*)
                      when (= (compact-kanji-ord r) ord)
                        do (return (compact-kanji-text r))))))))
+
+(defun memdict-find-by-words-seqs (table texts seqs)
+  "One side of find-words-seqs' database call: a single select-dao over
+   (text IN TEXTS AND seq IN SEQS). Those rows arrive in physical (ctid) order
+   because the query carries no ORDER BY, and the caller depends on it:
+   expand-segment-list stable-sorts candidates by score, so physical order is
+   what decides which of two equally scored alternatives is printed first.
+   Looping memdict-find-by-seq-text per (text, seq) pair returns word-major
+   groups instead, which is what reordered tied alternatives on 72 golden
+   lines. Rows come back sorted by physical rank, mirroring the database."
+  (let* ((name (string-downcase (symbol-name table)))
+         (kana-p (and (search "kana" name) t))
+         (it (gethash (if kana-p "kana_text" "kanji_text") *int-tables*)))
+    (when it
+      (let ((ranks (funcall (int-fn 'int-text-table-ranks) it))
+            (pairs nil))
+        (dolist (s seqs)
+          (loop for r in (funcall (int-fn 'int-text-find-by-seq-indexes) it s)
+                for row = (decode-int-row-at (if kana-p t nil) it r)
+                for txt = (if kana-p (compact-kana-text row)
+                              (compact-kanji-text row))
+                when (member txt texts :test 'equal)
+                  do (push (cons (aref ranks r) row) pairs)))
+        (loop for (nil . row) in (sort pairs '< :key 'car) collect row)))))
 
 (defun memdict-find-by-seq-text (table seq text)
   "Rows for SEQ with TEXT in TABLE (ascending id = DB select-dao order).

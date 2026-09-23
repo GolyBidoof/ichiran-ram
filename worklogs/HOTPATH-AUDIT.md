@@ -96,15 +96,37 @@ deep refactor of scoring rules, which the contract forbids changing; and
 ichiran has no bigram connection matrix to replace, so the usual "dense cost
 matrix" advice does not map onto this architecture.
 
-## The constraint that dominates all of the above, and its root cause
+## The constraint that dominates all of the above
 
 The RAM path is currently **not byte-identical to the database path**: 83 of
 364 golden lines differ. Optimising the analyzer before closing that gap risks
 making the divergence harder to attribute, and the stated requirement is
 database-identical output. `scripts/ram-parity.sh` exists to hold that line.
 
-The divergences are **one root cause, not many**. Structural diffing by JSON
-path shows the dominant signature is `seq` on 72 lines, `gloss` on 70 and
+**Correction.** An earlier version of this section claimed the divergences
+were one root cause and that heap order versus id order explained them. That
+claim was wrong and is retracted. Two fixes were made on the strength of it,
+both verified correct in isolation, and together they moved the corpus from
+83 to 81 differing lines, not to zero:
+
+- `int-load-text` now records each row's physical (ctid) rank and uses it as
+  the tie-break when building the text-major and seq-major indexes, instead of
+  id. Verified: `memdict-find 'kana-text "とう"` now returns exactly the
+  database order `52034, 51967, 52012, 52046, 52201, 52326`, where it
+  previously returned id order. Kept, because matching the database's own row
+  order is required for parity regardless of whether it is sufficient.
+- `find-substring-words-ram-seed` now reverses the rows it stores. The
+  database branch of `find-substring-words` fills the same hash with `PUSH`,
+  so its candidate list for a text is in reverse query order, and the RAM seed
+  was assigning forwards. Kept for the same reason.
+
+Neither changed the corpus result, so the candidate list order is evidently
+not what decides the ordering that actually diverges. The 81 remaining lines
+are still unexplained and the next step is to trace one of them end to end
+rather than reason about which stage looks responsible.
+
+What is solid is the measurement, not the explanation. Structural diffing by
+JSON path shows the dominant signature is `seq` on 72 lines, `gloss` on 70 and
 `reading` on 48, and in every case the *sets* are equal and only the order
 differs, always inside the `alternative` and `kana` lists. Worked example,
 golden line 10:
@@ -115,10 +137,13 @@ ram alternative seqs: [1445980, 1536000, 1446740, 2207550, ...]
 same set: True
 ```
 
-Both entries score 16. The order is decided by `stable-sort` on
-`segment-score` in `expand-segment-list`: a stable sort preserves the input
-order for ties, so **the candidate list order decides the output**, and it is
-the only thing that differs.
+Both entries score 16, so `stable-sort` in `expand-segment-list` should
+preserve input order and the tie is decided upstream. `expand-segment-list`
+builds its input as, for each segment, `[segment, segsplit]`, which means the
+first alternative is the primary word chosen for that span and the second is
+its split alternative. The database picks `1536000` as primary, the RAM path
+picks `1445980`. Which stage makes that choice is *not* established; the two
+candidate-ordering fixes above were supposed to decide it and did not.
 
 Where the order comes from, measured on `kana_text` for text `とう`:
 

@@ -37,6 +37,7 @@
   (ids #() :type (simple-array (unsigned-byte 32) (*)))
   (seqs #() :type (simple-array (unsigned-byte 32) (*)))
   (ords #() :type (simple-array (unsigned-byte 32) (*)))
+  (ranks #() :type (simple-array (unsigned-byte 32) (*)))
   (text-ids #() :type (simple-array (unsigned-byte 32) (*)))
   (commons #() :type (simple-array (signed-byte 32) (*)))
   (flags #() :type (simple-array (unsigned-byte 8) (*)))
@@ -158,13 +159,35 @@
                (text-count (make-array nt :element-type '(unsigned-byte 32) :initial-element 0))
                (seq-major (make-array n :element-type '(unsigned-byte 32)))
                (seq-start (make-array (1+ max-seq) :element-type '(unsigned-byte 32) :initial-element 0))
-               (seq-count (make-array (1+ max-seq) :element-type '(unsigned-byte 32) :initial-element 0)))
-          ;; Text-major order: sort row indices by (text-idx, id).
-          ;; Key packs into one fixnum (text-idx < 2^22, id < 2^32).
+               (seq-count (make-array (1+ max-seq) :element-type '(unsigned-byte 32) :initial-element 0))
+               ;; Physical row order. The database path reaches these rows
+               ;; through select-dao calls that carry no ORDER BY, so Postgres
+               ;; returns them in ctid order (the text btree stores equal keys
+               ;; in ctid order, so an index scan preserves it). Downstream,
+               ;; expand-segment-list stable-sorts candidates by score and a
+               ;; stable sort leaves ties in input order, which makes this
+               ;; order visible in the output: 72 of 364 golden lines differed
+               ;; purely because the tie-break here was id rather than
+               ;; physical position.
+               (ranks (let* ((heap-ids (query (format nil "SELECT id FROM ~a ORDER BY ctid"
+                                                      table)
+                                              :column))
+                             (rank-of-id (make-array (1+ (reduce #'max heap-ids))
+                                                     :element-type '(unsigned-byte 32)
+                                                     :initial-element 0)))
+                        (loop for id in heap-ids for r from 0
+                              do (setf (aref rank-of-id id) r))
+                        (let ((out (make-array n :element-type '(unsigned-byte 32))))
+                          (loop for i from 0 below n
+                                do (setf (aref out i)
+                                         (aref rank-of-id (aref ids i))))
+                          out))))
+          ;; Text-major order: sort row indices by (text-idx, physical rank).
+          ;; Key packs into one fixnum (text-idx < 2^22, rank < 2^32).
           (let ((order (make-array n :element-type 'fixnum)))
             (loop for i from 0 below n do (setf (aref order i) i))
             (sort order '< :key (lambda (i) (+ (ash (aref text-ids i) 32)
-                                               (aref ids i))))
+                                               (aref ranks i))))
             (loop for pos from 0 below n
                   for i = (aref order pos)
                   do (setf (aref text-major pos) i)
@@ -177,7 +200,7 @@
           (let ((order (make-array n :element-type 'fixnum)))
             (loop for i from 0 below n do (setf (aref order i) i))
             (sort order '< :key (lambda (i) (+ (ash (aref seqs i) 32)
-                                               (aref ids i))))
+                                               (aref ranks i))))
             (loop for pos from 0 below n
                   for i = (aref order pos)
                   do (setf (aref seq-major pos) i)
@@ -190,7 +213,8 @@
             (values (make-int-text-table
                      :n n :texts texts-vec :text-index text-index
                      :ids (funcall freeze-u32 ids) :seqs (funcall freeze-u32 seqs)
-                     :ords (funcall freeze-u32 ords) :text-ids (funcall freeze-u32 text-ids)
+                     :ords (funcall freeze-u32 ords) :ranks (funcall freeze-u32 ranks)
+                     :text-ids (funcall freeze-u32 text-ids)
                      :commons (funcall freeze-i32 commons)
                      :flags (funcall freeze-u8 flags)
                      :tags (funcall freeze-vec tags-pool) :tag-ids (funcall freeze-u32 tag-ids)
@@ -259,7 +283,9 @@
                      '< :key (lambda (r) (aref (int-text-table-ords table) r)))))))
 
 (defun int-text-find-by-seq-indexes (table seq)
-  "Row indexes for SEQ in id order. NIL if none."
+  "Row indexes for SEQ in physical (ctid) order, matching the database. The
+   seq-major index already uses physical rank as its tie-break, so re-sorting
+   by id here is exactly what reordered tied candidates."
   (when (<= seq (int-text-table-max-seq table))
     (let ((start (aref (int-text-table-seq-start table) seq))
           (count (aref (int-text-table-seq-count table) seq)))

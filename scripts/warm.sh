@@ -22,13 +22,25 @@ start() {
   fi
   rm -f "$FIFO"; mkfifo "$FIFO" || exit 1
   : > "$OUT"
-  # a writer that never closes, so the server's stdin does not hit EOF
-  sleep 100000 > "$FIFO" &
-  echo $! > "$HOLDF"
-  ./scripts/sbcl-wrapped --dynamic-space-size 14336 --non-interactive \
-    --load scripts/warm-server.lisp < "$FIFO" >> "$OUT" 2>&1 &
-  echo $! > "$PIDF"
-  echo "booting pid $(cat "$PIDF"); waiting for WARM-READY ..."
+  # Both the server and the writer that keeps its stdin open are started in
+  # their OWN sessions. Starting them as children of the calling shell means an
+  # aborted or timed-out call kills the process group, and a dead listener
+  # turns every later request into a full-length wait.
+  python3 - "$FIFO" "$OUT" "$PIDF" "$HOLDF" <<'PYEOF'
+import subprocess, sys
+fifo, out, pidf, holdf = sys.argv[1:5]
+holder = subprocess.Popen(["sh", "-c", "exec sleep 100000 > " + fifo],
+                          start_new_session=True)
+open(holdf, "w").write(str(holder.pid))
+log = open(out, "ab")
+srv = subprocess.Popen(["./scripts/sbcl-wrapped", "--dynamic-space-size", "14336",
+                        "--non-interactive", "--load", "scripts/warm-server.lisp"],
+                       stdin=open(fifo, "r"), stdout=log, stderr=log,
+                       start_new_session=True)
+open(pidf, "w").write(str(srv.pid))
+print("booting pid", srv.pid)
+PYEOF
+  echo "booting; waiting for WARM-READY ..."
   for _ in $(seq 1 240); do
     if grep -aq "WARM-READY" "$OUT" 2>/dev/null; then echo "ready"; return 0; fi
     if ! kill -0 "$(cat "$PIDF")" 2>/dev/null; then
@@ -41,8 +53,12 @@ start() {
 
 send() {
   [ -f "$PIDF" ] || { echo "not started"; return 1; }
+  if ! kill -0 "$(cat "$PIDF")" 2>/dev/null; then
+    echo "no warm server running (died or was killed); run: scripts/warm.sh start"
+    return 1
+  fi
   local before after want
-  before=$(grep -ac "WARM-RESULT" "$OUT" 2>/dev/null | head -1)
+  before=$(grep -ac "^WARM-RESULT-BEGIN" "$OUT" 2>/dev/null | head -1)
   want=$(( ${before:-0} + 1 ))
   printf '%s\n' "$1" > "$FIFO" || return 1
   for _ in $(seq 1 ${WARM_WAIT:-240}); do

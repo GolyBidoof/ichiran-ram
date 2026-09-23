@@ -684,7 +684,17 @@
                      (when kanji-loaded
                        (setf rows (memdict-call 'memdict-find 'kanji-text part))))
                  (when rows
-                   (setf (gethash part substring-hash) (cons :compact rows))))))
+                   ;; REVERSED, because the database branch of
+                   ;; find-substring-words fills the same hash with PUSH, so
+                   ;; its candidate list for a text is in reverse query order.
+                   ;; That order is what decides which of two equally scored
+                   ;; alternatives is printed first, via the stable sort in
+                   ;; expand-segment-list. Assigning the rows forward here was
+                   ;; the dominant cause of the RAM path diverging: with the
+                   ;; query in ctid order (see int-load-text), reversing
+                   ;; reproduces the database exactly.
+                   (setf (gethash part substring-hash)
+                         (cons :compact (reverse rows)))))))
       (if trie
           (loop for start from 0 below (length str)
                 unless (member start sticky)
@@ -779,21 +789,15 @@
        (let ((kw (when kanji-words
                    (if (and (memdict-table-loaded-p "kanji_text")
                             (memdict-shims-loaded-p))
-                       ;; Id-ascending to mirror the DB select-dao row order.
-                       (sort (loop for w in kanji-words
-                                   nconc (loop for s in seqs
-                                               nconc (memdict-call 'memdict-find-by-seq-text
-                                                                   'kanji-text s w)))
-                             '< :key 'id)
+                       ;; Physical (ctid) order, as the database returns it.
+                       (memdict-call 'memdict-find-by-words-seqs
+                                     'kanji-text kanji-words seqs)
                        (select-dao 'kanji-text (:and (:in 'text (:set kanji-words)) (:in 'seq (:set seqs)))))))
              (rw (when kana-words
                    (if (and (memdict-table-loaded-p "kana_text")
                             (memdict-shims-loaded-p))
-                       (sort (loop for w in kana-words
-                                   nconc (loop for s in seqs
-                                               nconc (memdict-call 'memdict-find-by-seq-text
-                                                                   'kana-text s w)))
-                             '< :key 'id)
+                       (memdict-call 'memdict-find-by-words-seqs
+                                     'kana-text kana-words seqs)
                        (select-dao 'kana-text (:and (:in 'text (:set kana-words)) (:in 'seq (:set seqs))))))))
          (return (nconc kw rw)))))
 
