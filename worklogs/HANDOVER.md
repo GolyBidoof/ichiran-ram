@@ -207,7 +207,7 @@ cache stats stayed `(0 0)` proving it's never hit by `:with-info`).
 ## 9. Useful commands
 
 ```bash
-cd /Users/golybidoof/Projects/ichiran-master
+cd ~/Projects/ichiran-master
 ./scripts/env-check.sh       # env healthy?
 ./scripts/parity.sh          # 782/782 gate (~2-3 min)
 ./scripts/golden-diff.sh     # byte-identical gate (~3-5 min)

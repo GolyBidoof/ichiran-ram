@@ -80,12 +80,15 @@
   `simple-text`, so building a suffix compound from a RAM row previously
   signalled no-primary-method now that `find-word-with-pos` returns compact
   structs.
-- Note: cl-ppcre in this tree has no scanner cache, so regexes really are
-  recompiled per call. Memoizing them was measured and does **not** help
-  (`simplify-ngrams`: scanner builds 3436 -> 3, run got slower); the cost is
-  matching, not compiling. GC is 0.2% of wall time despite 561MB consed per
-  corpus run, so allocation reduction is not a wall-clock lever here. See
-  worklogs/PERF-PLAN.md.
+- Note on regex scanning: cl-ppcre caches STRING patterns but not the list
+  patterns the character-class helpers were handing it, so `count-char-class`
+  recompiled its scanner on every call, 497 times per line. Compiling those
+  patterns once (`*char-count-scanners*`) cut scanner builds from 1,491,524 to
+  6,000 over 3,000 lines, for 11.9% best and 5.5% median speedup. An earlier
+  attempt to memoize `simplify-ngrams` scanners did not help and was dropped:
+  the cost there is matching, not compiling. GC is 0.2% of wall time despite
+  561MB consed per corpus run, so allocation reduction is not a wall-clock lever
+  here. See worklogs/PERF-PLAN.md and docs/PERFORMANCE-HISTORY.md.
 
 - Integer-keyed dictionary layer (`src/memdict-int.lisp`) covers `kana_text`,
   `kanji_text`, `entry`, `conjugation`, `conj_prop` and

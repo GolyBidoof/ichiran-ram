@@ -47,6 +47,7 @@ skip the rest of this file.
 - [Verification](#verification)
 - [Requirements and what it costs](#requirements-and-what-it-costs)
 - [Troubleshooting](#troubleshooting)
+- [Benchmarks](#benchmarks)
 - [Documentation](#documentation)
 - [Credits and license](#credits-and-license)
 
@@ -390,6 +391,35 @@ baked core does for you.
 **One sentence romanizes differently from the database.** Re-run it. If it
 reproduces, please report it with the sentence and both outputs; see the caveat
 under [Verification](#verification).
+
+## Benchmarks
+
+The harnesses are in `scripts/`, they take their input path from `CORPUS`, and
+the numbers they produced are written up in
+[docs/PERFORMANCE-HISTORY.md](docs/PERFORMANCE-HISTORY.md) with the raw runs in
+[worklogs/PERF-RESULTS.md](worklogs/PERF-RESULTS.md).
+
+| Script | What it measures |
+| --- | --- |
+| `bench-all.sh` | wall time and per-line time, best of three, for database, RAM and core |
+| `bench-vn.lisp` | one corpus through the database or the RAM layer, with query counts |
+| `bench-lines.lisp` | per-line latency, worker skew, cache warming and collector cost |
+| `bench-core.lisp` | the same measurement against a baked core |
+| `audit-stages.lisp` | where a romanize call spends its time, stage by stage |
+| `audit-calls.lisp` | per-function call counts over a real corpus |
+| `warm.sh` | keeps one process warm, so a measurement costs seconds instead of a load |
+
+```sh
+CORPUS=/path/to/text.txt ./scripts/bench-all.sh
+./scripts/warm.sh start
+./scripts/warm.sh send '(time (ichiran:romanize "一覧は最高だぞ"))'
+```
+
+Two things worth knowing before comparing numbers. Cross-process timings on one
+machine vary by five to six percent, so the harnesses interleave configurations
+and report best and median rather than a single run. And a measurement that
+changes fewer bytes allocated or fewer scanners compiled is more trustworthy than
+one that changes a stopwatch reading.
 
 ## Documentation
 

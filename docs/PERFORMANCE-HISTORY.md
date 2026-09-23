@@ -76,7 +76,7 @@ made a baked serving core possible at all.
 
 ## 4. Parallel serving
 
-Commits `71d6d75`, `dc92812`, `9a91f05`, `46b2073`, `f106806`.
+Commits `71d6d75`, `dc92812`, `e2e56e0`, `30bac3a`, `add9bd5`.
 
 Sentences are independent, so they are sharded across worker threads with
 `map-lines-parallel`, one ordered result vector, and per-worker analyzer state
@@ -85,8 +85,8 @@ Sentences are independent, so they are sharded across worker threads with
 | Measurement | Effect |
 | --- | --- |
 | Tier 1 (`dc92812`) | **5.57x on 8 workers** |
-| Worker-count tuning (`9a91f05`) | Default to performance cores; past that count throughput falls |
-| Scaling curve (`46b2073`, `f106806`) | 8 workers 7.59x, 10 workers **7.82x**, 14 workers 5.66x |
+| Worker-count tuning (`e2e56e0`) | Default to performance cores; past that count throughput falls |
+| Scaling curve (`30bac3a`, `add9bd5`) | 8 workers 7.59x, 10 workers **7.82x**, 14 workers 5.66x |
 | Final, 10 workers (this session) | 2.29s for 18,939 lines, 0.121 ms/line, **10.9x to 12.8x** |
 
 Why it helped: the dictionary is read-only after load, so parallelising is nearly
@@ -96,35 +96,35 @@ efficiency cores. The default is now the performance-core count rather than
 
 ## 5. Snapshot and core: startup from 84s to under 1.3s
 
-Commits `d88dc17`, `dbf7c03`, `3169ce8`, `37f7b38`, `2e20627`, `31dd22f`,
-`5db3946`, plus `adff451`.
+Commits `59ccfce`, `d8c7417`, `e5b28bb`, `a3a7591`, `ad22398`, `7df413b`,
+`4591f25`, plus `3134526`.
 
 | Step | Dictionary load |
 | --- | --- |
 | Loading from PostgreSQL | **84s** |
-| On-disk columnar snapshot (`d88dc17`) | 84s to **8.9s** |
-| Encoding string pools as blobs (`dbf7c03`) | 7.31s to **5.47s** |
-| Encoding text pools as blobs (`3169ce8`) | 5.47s to **2.61s** |
-| Baked serving core (`2e20627`) | **1.21s to ready**, no database at all |
-| Sense layer in its own snapshot (`5db3946`) | Removes the last startup dependency on PostgreSQL |
+| On-disk columnar snapshot (`59ccfce`) | 84s to **8.9s** |
+| Encoding string pools as blobs (`d8c7417`) | 7.31s to **5.47s** |
+| Encoding text pools as blobs (`e5b28bb`) | 5.47s to **2.61s** |
+| Baked serving core (`ad22398`) | **1.21s to ready**, no database at all |
+| Sense layer in its own snapshot (`4591f25`) | Removes the last startup dependency on PostgreSQL |
 
 Why it helped: the layer is flat typed columns plus interned string pools, so it
 can be written as raw bytes and read back with bulk reads. Building one Lisp
 string per dictionary entry was most of the decode time; storing one concatenated
 blob plus N+1 offsets removes that entirely.
 
-Also `eff5408`: snapshots carry a build stamp and probe the database instead of
+Also `dd2db24`: snapshots carry a build stamp and probe the database instead of
 assuming it, which is why a rebuilt snapshot differs from an older one in exactly
 those stamp bytes and nowhere else.
 
 ## 6. Parity: finding and fixing the divergences
 
-Commits `83d9006`, `d56d432`, `65c2e3a`, `2b29eda`, `adff451`, `572e28d`.
+Commits `674bbe1`, `d1200a1`, `987c36e`, `99def94`, `3134526`, `406b253`.
 
-`83d9006` added `scripts/ram-parity.sh` and it immediately found three
-RAM-versus-database divergences. `d56d432` pinned one root cause (heap order
-versus id order), `65c2e3a` matched the database's row order and candidate seed
-order, and `2b29eda` closed the gap: **0 of 364 golden lines differ**.
+`674bbe1` added `scripts/ram-parity.sh` and it immediately found three
+RAM-versus-database divergences. `d1200a1` pinned one root cause (heap order
+versus id order), `987c36e` matched the database's row order and candidate seed
+order, and `99def94` closed the gap: **0 of 364 golden lines differ**.
 
 Why it helped: this is the phase that made the speed work shippable. The subtle
 one is ordering. The database path selects rows with no `ORDER BY`, so Postgres
@@ -136,27 +136,27 @@ does.
 
 ## 7. Micro-optimisation after parity
 
-Commits `b3874bf`, `28e1019`, `c087760`, `e89398d`, `720ae9e`, `506f8f5`,
-`14114b9`, `4f91c0f`, `1986044`, `1bc6e3c`, `97fcbef`, `fc7c43e`, `038a904`.
+Commits `73a68ab`, `116ff2b`, `a278f40`, `b7884c0`, `6919d4a`, `20b0500`,
+`fec5a6a`, `5fc4e95`, `cab3cd2`, `6be16cd`, `03dd473`, `0561016`, `0c653b6`.
 
 Once the answers were provably identical, the remaining time was attacked
-function by function, guided by audits (`1986044`, `c087760`) rather than
+function by function, guided by audits (`cab3cd2`, `a278f40`) rather than
 intuition.
 
 | Improvement | Effect |
 | --- | --- |
-| Stop rebuilding regex scanners per word (`b3874bf`) | Golden corpus RAM time to 1.27s |
-| Build the suffix cache without a connection (`28e1019`) | Removes a connection from startup |
-| Gloss JSON fragments cached in seq-indexed vectors (`506f8f5`) | Removes repeated JSON construction |
-| Port the last raw SQL suffix predicate to RAM (`14114b9`) | Removes the last per-word query |
-| Stop opening a connection per word (`4f91c0f`) | Removes a connection from the serving path |
-| `get-seg-splits` memo per `find-best-path` (`e89398d`) | 74,810 calls, 26,985 distinct pairs, 63.9% hits, identity-keyed and call-scoped |
-| `gen-score` cache per worker (`720ae9e`) | Packed fixnum key, 128.5 calls per line become 13.1 real computations |
-| Warm the expensive shapes at startup (`1bc6e3c`) | Moves first-call cost out of the first request |
-| Remove allocating `INTERSECTION` predicates (`97fcbef`) | Removes consing from the scoring path |
-| Character-class scanners compiled once (`038a904`) | **1,491,524 scanner compilations to 6,000** over 3,000 lines; 11.9% best, 5.5% median |
-| First-character direct index (`fc7c43e`) | Lookup 252.8ms to 60.9ms for 186,966 calls, **4.15x**; 8.9% serial, 7.9% parallel overall |
-| Table-name dispatch without `string-downcase` (`038a904`) | 0.59% less allocation, measured across two revisions |
+| Stop rebuilding regex scanners per word (`73a68ab`) | Golden corpus RAM time to 1.27s |
+| Build the suffix cache without a connection (`116ff2b`) | Removes a connection from startup |
+| Gloss JSON fragments cached in seq-indexed vectors (`20b0500`) | Removes repeated JSON construction |
+| Port the last raw SQL suffix predicate to RAM (`fec5a6a`) | Removes the last per-word query |
+| Stop opening a connection per word (`5fc4e95`) | Removes a connection from the serving path |
+| `get-seg-splits` memo per `find-best-path` (`b7884c0`) | 74,810 calls, 26,985 distinct pairs, 63.9% hits, identity-keyed and call-scoped |
+| `gen-score` cache per worker (`6919d4a`) | Packed fixnum key, 128.5 calls per line become 13.1 real computations |
+| Warm the expensive shapes at startup (`6be16cd`) | Moves first-call cost out of the first request |
+| Remove allocating `INTERSECTION` predicates (`03dd473`) | Removes consing from the scoring path |
+| Character-class scanners compiled once (`0c653b6`) | **1,491,524 scanner compilations to 6,000** over 3,000 lines; 11.9% best, 5.5% median |
+| First-character direct index (`0561016`) | Lookup 252.8ms to 60.9ms for 186,966 calls, **4.15x**; 8.9% serial, 7.9% parallel overall |
+| Table-name dispatch without `string-downcase` (`0c653b6`) | 0.59% less allocation, measured across two revisions |
 
 Why the last two mattered: `count-char-class` ran on the hot path and handed
 cl-ppcre a raw pattern string on every call, and cl-ppcre's own cache does not
@@ -172,12 +172,12 @@ plausible idea that a future reader would otherwise try again.
 
 | Rejected | Evidence |
 | --- | --- |
-| Baked prefix trie (`c0072ca`, `cae131d`, `77eea9a`, `3651dd7`) | Builds correctly, 8,411,392 texts and 13,303,350 nodes, but is neutral to slower: 0.492 vs 0.490 and 0.212 vs 0.168 ms. Candidate windows are nearly all valid prefixes, so there is nothing to prune. Kept behind `TRIE_TABLES`, off by default |
+| Baked prefix trie (`c0072ca`, `cae131d`, `77eea9a`, `6a6272e`) | Builds correctly, 8,411,392 texts and 13,303,350 nodes, but is neutral to slower: 0.492 vs 0.490 and 0.212 vs 0.168 ms. Candidate windows are nearly all valid prefixes, so there is nothing to prune. Kept behind `TRIE_TABLES`, off by default |
 | Reading-str memo (`eb7455e`) | Net-negative per sentence, removed |
 | Trimming `*max-word-length*` 50 to 37 | Removes only 4.6% of windows, and is not safe: the number-plus-counter path admits windows longer than any dictionary text |
 | Window pre-filter (this session) | Provably skip 16.28% of windows (721,226 of 4,429,093) but only 0.05% less allocation and no time gain |
 | `kanji-regex` scanner cache (this session) | The cache never gains an entry; the function is called zero times on all three corpora. The compilations came from `count-char-class` |
-| More workers (`46b2073`) | Past the performance-core count, throughput falls |
+| More workers (`30bac3a`) | Past the performance-core count, throughput falls |
 
 ## 9. Where it ended up
 

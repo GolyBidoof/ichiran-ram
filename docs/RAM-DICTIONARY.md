@@ -184,12 +184,14 @@ sentence −52…−63%). Full page (19 paragraphs, 4.3K chars): 180,985 →
 remote DB the query-count win matters more than local wall time. Details:
 `worklogs/TABLE-BENCHMARK.md`, `worklogs/R6-REPORT.md`.
 
-Full dictionary (integer layer + compact sense layer, 8.1GB heap), 364-line
-golden corpus, `ichiran:romanize` warm: DB path 18.85s → RAM 2.52s, i.e.
-51.8ms → 6.9ms per line (**7.48x**). Residual DB queries drop from 238.9 to
-17.1 per line. RAM-vs-DB primary-output agreement is 357/364; the 7
-differences are alternative-ordering ties, not missing readings. Details and
-the query-shape breakdown: `worklogs/R7-REPORT.md`.
+Full dictionary (integer layer + compact sense layer, 8.1GB heap), the 382-line
+golden corpus, `ichiran:romanize` warm: DB path 51.7ms per line, RAM 1.27ms per
+line (about 41x), and a baked core matches RAM. Residual DB queries drop to 0.28
+per line. RAM output is byte-identical to the database baseline over the whole
+corpus (`scripts/ram-parity.sh`); the 7 differing lines this section used to
+report were alternative-ordering ties, closed by matching the database's row
+order. Details and the query-shape breakdown: `worklogs/R7-REPORT.md` and
+[PERFORMANCE-HISTORY.md](PERFORMANCE-HISTORY.md).
 
 ## Troubleshooting
 
@@ -209,11 +211,13 @@ the query-shape breakdown: `worklogs/R7-REPORT.md`.
 
 - **Knife-edge tiebreaks.** Where two segmentations score (near-)identically
   (`toiu` vs `to`+`iu`, `nanjikara` vs alternatives), DB and RAM can pick
-  different winners because candidate order differs - and DB-vs-DB runs can
-  too (golden-diff is bimodal on one sentence even with all flags off).
-  RAM output sits inside the analyzer's natural variation; deterministic
-  tiebreaks are future upstream work.
-- **Full-dict RAM parity** (`*memdict-p*` with all 9 tables) needs the 64GB
-  host for final confirmation (this Mac caps SBCL at 16GB).
+  different winners because candidate order differs, and DB-vs-DB runs can too:
+  `golden-diff` is bimodal on one sentence even with all flags off. The RAM path
+  currently matches the database baseline byte for byte over the whole corpus
+  (see [Verification](#verification)), so this is a property of the analyzer
+  rather than of the RAM layer. Deterministic tiebreaks are future upstream work.
+- The 9-table compact preset (`full`) still needs a 32GB+ host to build. The
+  integer layer plus the compact sense layer is what covers the whole dictionary
+  in 8.1GB, and that configuration is parity-verified.
 - S1 memo cache and full-RAM overlap: with all tables loaded the cache is
   pure overhead (RAM is checked first anyway).

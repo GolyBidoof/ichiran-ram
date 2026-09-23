@@ -70,7 +70,7 @@ IMPLEMENTATION-PLAN.md, verified against a real environment.
 ## How to run everything
 
 ```bash
-cd /Users/golybidoof/Projects/ichiran-master
+cd ~/Projects/ichiran-master
 ./scripts/env-check.sh          # env healthy?
 ./scripts/parity.sh             # 782/782 gate
 ./scripts/golden-diff.sh        # byte-identical parity vs baseline

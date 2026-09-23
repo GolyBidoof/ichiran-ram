@@ -226,7 +226,7 @@ three.
 ## 9. Useful one-liners
 
 ```bash
-cd /Users/golybidoof/Projects/ichiran-master
+cd ~/Projects/ichiran-master
 ./scripts/parity.sh            # 782/782 gate
 ./scripts/golden-diff.sh       # byte-identical gate
 printf 'こんにちは\n' | ./scripts/serve-core.sh   # zero-DB lookup
