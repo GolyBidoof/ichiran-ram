@@ -588,19 +588,25 @@
                                                                (cdr ,patch-var))
                                                   (destem k ,stem))
                                               ,suf-var))))
-                     (etypecase pw
-                       (simple-text
-                        (make-instance 'proxy-text
-                                       :source pw
-                                       :text text
-                                       :kana kana
-                                       :hintedp t))
-                       (compound-text
-                        (with-slots ((stext text) (skana kana)) pw
-                          (setf stext text skana kana))
-                        pw))))
+                     (proxy-suffix-word pw text kana)))
                  ,primary-words)))))
 
+
+(defgeneric proxy-suffix-word (pw new-text new-kana)
+  (:documentation "Return PW rewritten as the suffixed form NEW-TEXT/NEW-KANA.
+   A generic function rather than an ETYPECASE because the RAM path hands this
+   code compact-kana/compact-kanji STRUCTS, which are not simple-text
+   subclasses and so fell through the etypecase: any negative or polite suffix
+   (偽れない = 偽る + れない) crashed under the RAM path while the database path
+   was fine. The shims add methods for the compact classes, which is where
+   every other compact-specific method already lives.")
+  (:method ((pw simple-text) new-text new-kana)
+    (make-instance 'proxy-text :source pw :text new-text :kana new-kana
+                               :hintedp t))
+  (:method ((pw compound-text) new-text new-kana)
+    (with-slots ((stext text) (skana kana)) pw
+      (setf stext new-text skana new-kana))
+    pw))
 
 (def-abbr-suffix abbr-nee :nai 2 (root)
   (find-word-with-conj-prop

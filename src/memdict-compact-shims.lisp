@@ -123,6 +123,19 @@
   ;; Mirror kanji-text: for a kanji row the text IS the kanji form.
   (compact-kanji-text obj))
 
+;; Compact rows as suffix-formation subjects. dict-grammar's defsuffix used an
+;; etypecase over simple-text/compound-text, so a suffixed compact row (for
+;; example 偽れない) fell through and crashed the RAM path on text the database
+;; path handled. proxy-text reads through true-text/get-kana, both of which are
+;; shimmed above.
+(defmethod ichiran/dict::proxy-suffix-word ((pw compact-kana) new-text new-kana)
+  (make-instance 'ichiran/dict::proxy-text :source pw :text new-text
+                                           :kana new-kana :hintedp t))
+
+(defmethod ichiran/dict::proxy-suffix-word ((pw compact-kanji) new-text new-kana)
+  (make-instance 'ichiran/dict::proxy-text :source pw :text new-text
+                                           :kana new-kana :hintedp t))
+
 (defmethod ichiran/dict::reading-str ((obj compact-kana))
   (ichiran/dict::reading-str* (ichiran/dict::get-kanji obj)
                               (ichiran/dict::get-kana obj)))

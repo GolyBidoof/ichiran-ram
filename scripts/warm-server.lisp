@@ -35,6 +35,39 @@
   "The standard 140-line the visual novel workload as a simple-vector."
   (coerce (loop repeat repeats append (vn-lines)) 'simple-vector))
 
+(defun golden-lines ()
+  "The 364 dumpable lines of data/golden-corpus.txt, the corpus the performance
+   plan records its ~2.6s full-RAM baseline over."
+  (with-open-file (in (asdf:system-relative-pathname :ichiran "data/golden-corpus.txt"))
+    (loop for line = (read-line in nil nil)
+          while line
+          for text = (string-trim '(#\Space #\Tab #\Newline) line)
+          unless (or (zerop (length text)) (char= (char text 0) #\#))
+            collect text)))
+
+(defun bench-corpus (&key (reps 3) (warmup t) (parallel nil) (workers 10))
+  "Best-of-REPS wall time over the golden corpus. REPORTS the serial number by
+   default, because that is the one the performance plan records. Warms first:
+   the first pass over a corpus pays lazily built caches, and measuring without
+   a warmup is how a run gets reported ~200ms slower than it is."
+  (let* ((work (golden-lines))
+         (n (length work))
+         (f (if parallel
+                (lambda () (ichiran/serve-parallel:map-lines-parallel
+                            work #'ichiran/serve-parallel:romanize-safe :workers workers))
+                (lambda () (map nil #'ichiran/serve-parallel:romanize-safe work)))))
+    (when warmup (funcall f))
+    (let ((best nil))
+      (dotimes (i reps)
+        (sb-ext:gc :full t)
+        (let ((t0 (get-internal-real-time)))
+          (funcall f)
+          (let ((wall (/ (- (get-internal-real-time) t0)
+                         internal-time-units-per-second)))
+            (when (or (null best) (< wall best)) (setf best wall)))))
+      (format nil "golden lines=~a ~:[serial~;parallel(n=~:*~a)~]-best=~ams"
+              n parallel (round (* 1000 best)) workers))))
+
 (defun bench (&key (repeats 20) (workers 10) (reps 3))
   "Best-of-REPS wall time over the the visual novel workload at WORKERS, plus serial."
   (let ((work (vn-work repeats))
