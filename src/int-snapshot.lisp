@@ -35,7 +35,7 @@
 (defparameter *magic* "ICHSNAP1"
   "8-byte file magic.")
 
-(defparameter *version* 2)
+(defparameter *version* 3)
 
 (defparameter *elem-types*
   '((unsigned-byte 8) (unsigned-byte 32) (signed-byte 32) fixnum)
@@ -55,7 +55,8 @@
   '(("entry" :n :seqs :contents :content-ids :flags :nkanji :nkana :direct :max-seq)
     ("conjugation" :n :ids :seqs :froms :vias :major :major-from)
     ("conj_prop" :n :ids :conj-ids :types :type-ids :poss :pos-ids :flags :major)
-    ("conj_source_reading" :n :ids :conj-ids :texts :text-ids :srcs :src-ids :major)))
+    ("conj_source_reading" :n :ids :conj-ids :texts :text-offsets
+                           :srcs :src-offsets :text-ids :src-ids :major)))
 
 (defun text-table-name-p (name)
   (member name '("kana_text" "kanji_text") :test #'equal))
@@ -105,12 +106,21 @@
     (incf (sink-pos s) 8)))
 
 (defun sink-octets (s octets)
-  "Append a small octet vector via the buffer."
+  "Append OCTETS. Anything larger than the buffer goes straight to the file:
+   the buffered path can only copy the buffer's worth, and REPLACE truncates
+   silently, so POS would advance past the end of the buffer and every later
+   byte would be written at the wrong offset. That is what corrupted the first
+   attempt at storing an encoded string pool: a 74M character blob is about
+   150MB of UTF-8, and it came back mangled from 8MB onward."
   (let ((n (length octets))
         (buf (sink-buf s)))
-    (when (> (+ (sink-pos s) n) (length buf)) (sink-flush s))
-    (replace buf octets :start1 (sink-pos s))
-    (incf (sink-pos s) n)))
+    (if (> n (length buf))
+        (sb-sys:with-pinned-objects (octets)
+          (sink-blob s (sb-sys:vector-sap octets) n))
+        (progn
+          (when (> (+ (sink-pos s) n) (length buf)) (sink-flush s))
+          (replace buf octets :start1 (sink-pos s))
+          (incf (sink-pos s) n)))))
 
 (defun sink-blob (s sap len)
   "Write a large region directly, after flushing the buffer."
@@ -275,6 +285,11 @@
                   (dotimes (i (length value)) (sink-u64 s (aref value i))))
                  (t (error "int-snapshot: cannot store vector of ~s" (type-of first))))))
         ((integerp value) (sink-u8 s 0) (sink-u64 s value))
+        ;; A bare string, which is how an encoded string pool is stored: one
+        ;; concatenated blob instead of millions of separate strings. Kind 5
+        ;; exists for that, and it has to be tested before the vector branches
+        ;; because a string IS a vector.
+        ((stringp value) (sink-u8 s 5) (write-string* s value))
         (t (error "int-snapshot: cannot store ~s" value))))
 
 (defun array-element-type-is-t (vec)
@@ -290,6 +305,7 @@
              (dotimes (i n) (setf (aref v i) (read-string* s)))
              v)))
       (3 nil)
+      (5 (read-string* s))
       (4 (let ((n (source-u64 s)))
            (let ((v (make-array n)))
              (dotimes (i n) (setf (aref v i) (source-u64 s)))
@@ -398,6 +414,7 @@
                   ;; wants the derived indexes serialized instead of rebuilt.
                   (read-t 0)
                   (rec-t 0)
+                  (per-table nil)
                   (t0 (get-internal-real-time)))
              (dotimes (i ntables)
                (let* ((name (read-string* src))
@@ -408,16 +425,26 @@
                    (push (read-string* src) fields)
                    (push (read-value src) values))
                  (setf fields (nreverse fields) values (nreverse values))
-                 (let ((a (get-internal-real-time)))
+                 (let* ((a (get-internal-real-time))
+                        (dec (/ (- a t0) internal-time-units-per-second))
+                        (obj (reconstruct name fields values))
+                        (b (get-internal-real-time))
+                        (rec (/ (- b a) internal-time-units-per-second)))
                    (incf read-t (- a t0))
-                   (push (cons name (reconstruct name fields values)) out)
-                   (let ((b (get-internal-real-time)))
-                     (incf rec-t (- b a))
-                     (setf t0 b)))))
+                   (incf rec-t (- b a))
+                   (push (list name dec rec) per-table)
+                   (setf t0 b)
+                   (push (cons name obj) out))))
              (format *trace-output*
                      "~&SNAPSHOT-PHASES decode=~,2fs rebuild-indexes=~,2fs~%"
                      (/ read-t internal-time-units-per-second)
                      (/ rec-t internal-time-units-per-second))
+             ;; Per table, because the fix differs: a table that is almost all
+             ;; decode is paying for object construction (pool strings and
+             ;; column vectors), which is what a zero-copy store removes.
+             (dolist (row (sort per-table #'> :key #'second))
+               (format *trace-output* "  ~28a decode=~6,2fs rebuild=~5,2fs~%"
+                       (first row) (second row) (third row)))
              (finish-output *trace-output*)
              (nreverse out)))
       (sb-posix:close fd))))

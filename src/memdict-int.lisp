@@ -670,6 +670,30 @@
                           (if (logtest 1 fl) t (if (logtest 2 fl) :null nil))
                           (if (logtest 4 fl) t (if (logtest 8 fl) :null nil)))))))
 
+(defun pool-encode (vec)
+  "Encode VEC (a vector of strings) as (values BLOB OFFSETS): one concatenated
+   string plus N+1 character offsets. A pool then decodes as ONE big string and
+   ONE u32 vector, instead of allocating a Lisp string per entry. That is what
+   made conj_source_reading cost 2.79s of the 6.4s snapshot decode: 8.4M rows
+   over two pools, so millions of small string allocations."
+  (let* ((n (length vec))
+         (off (make-array (1+ n) :element-type '(unsigned-byte 32)))
+         (total (loop for i from 0 below n
+                      sum (length (aref vec i)) of-type fixnum))
+         (blob (make-string total))
+         (pos 0))
+    (loop for i from 0 below n
+          for str = (aref vec i)
+          do (setf (aref off i) pos)
+             (replace blob str :start1 pos)
+             (incf pos (length str)))
+    (setf (aref off n) pos)
+    (values blob off)))
+
+(defun pool-ref (blob off i)
+  "The I-th string of a pool encoded by POOL-ENCODE."
+  (subseq blob (aref off i) (aref off (1+ i))))
+
 (defun int-load-csr (&key (chunk 200000) conn)
   "Load conj_source_reading (id conj-id text source-text). ORDER BY id."
   (sb-ext:gc :full t)
@@ -711,30 +735,37 @@
              (ids-v (int-u32-col ids n))
              (conj-v (int-u32-col conj-ids n))
              (text-v (int-u32-col text-ids n))
-             (src-v (int-u32-col src-ids n))
-             (texts-v (coerce texts 'simple-vector))
-             (srcs-v (coerce srcs 'simple-vector)))
+             (src-v (int-u32-col src-ids n)))
         (let ((major (int-sort-positions
                       n (lambda (i) (+ (ash (aref conj-v i) 32)
                                        (aref ids-v i))))))
           (sb-ext:gc :full t)
-          (let ((after (sb-kernel:dynamic-usage)))
-            (values (list :n n :ids ids-v :conj-ids conj-v
-                          :texts texts-v :text-ids text-v
-                          :srcs srcs-v :src-ids src-v
-                          :major major
-                          :by-conj (int-group-ranges
-                                    major n (lambda (r) (aref conj-v r))))
-                    (- after before))))))))
+          (multiple-value-bind (texts-blob text-off) (pool-encode texts)
+            (multiple-value-bind (srcs-blob src-off) (pool-encode srcs)
+              (let ((after (sb-kernel:dynamic-usage)))
+                (values (list :n n :ids ids-v :conj-ids conj-v
+                              :texts texts-blob :text-offsets text-off
+                              :srcs srcs-blob :src-offsets src-off
+                              :text-ids text-v :src-ids src-v
+                              :major major
+                              :by-conj (int-group-ranges
+                                        major n (lambda (r) (aref conj-v r))))
+                        (- after before))))))))))
 
 (defun int-csr-row-count (table)
   (getf table :n))
 
 (defun int-csr-by-id (table conj-id)
-  "List of (text source-text) for CONJ-ID in id order."
-  (let ((range (gethash conj-id (getf table :by-conj))))
+  "List of (text source-text) for CONJ-ID in id order. Strings are materialised
+   here from the encoded pools, so the millions of pool strings that used to be
+   built at load time are only built for the rows actually asked for."
+  (let ((range (gethash conj-id (getf table :by-conj)))
+        (t-blob (getf table :texts))
+        (t-off (getf table :text-offsets))
+        (s-blob (getf table :srcs))
+        (s-off (getf table :src-offsets)))
     (when range
       (loop for k from (car range) below (+ (car range) (cdr range))
             for i = (aref (getf table :major) k)
-            collect (list (aref (getf table :texts) (aref (getf table :text-ids) i))
-                          (aref (getf table :srcs) (aref (getf table :src-ids) i)))))))
+            collect (list (pool-ref t-blob t-off (aref (getf table :text-ids) i))
+                          (pool-ref s-blob s-off (aref (getf table :src-ids) i)))))))
