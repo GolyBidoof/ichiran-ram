@@ -14,10 +14,10 @@ lines of the corpus (blank lines and `#` comments are skipped).
 | golden-corpus (382 lines, 4093 chars) | database | 86.48s | 22.38s | 20.152s | 52.76ms |
 | | RAM snapshot | 13.05s | 2.14s | 1.523s | 3.99ms |
 | | baked core | 7.80s | 1.25s | 1.498s | 3.92ms |
-| vn-paragraphs (39 lines, 645 chars) | database | 14.03s | 4.13s | 2.234s | 57.29ms |
+| visual-novel sample batch 1 (39 lines, 645 chars) | database | 14.03s | 4.13s | 2.234s | 57.29ms |
 | | RAM snapshot | 7.18s | 0.64s | 0.204s | 5.24ms |
 | | baked core | 2.48s | 1.26s | 0.207s | 5.30ms |
-| vn-paragraphs2 (84 lines, 1665 chars) | database | 29.31s | 8.00s | 6.086s | 72.45ms |
+| visual-novel sample batch 2 (84 lines, 1665 chars) | database | 29.31s | 8.00s | 6.086s | 72.45ms |
 | | RAM snapshot | 8.66s | 0.97s | 0.546s | 6.50ms |
 | | baked core | 3.70s | 1.25s | 0.503s | 5.99ms |
 
@@ -144,7 +144,7 @@ windows are nearly all valid prefixes in these dictionaries, so there is nothing
 for a prefix index to prune. The code stays, off by default and behind
 `TRIE_TABLES`, but no trie core is shipped.
 
-## 350k character magazine
+## 350k-character magazine sample
 
 18939 lines, 335008 characters, average 17.7, longest 170, and heavily mixed:
 169k hiragana, 82k kanji, 38k katakana, 22.5k punctuation, 20.9k Latin and 19.9k
@@ -214,7 +214,7 @@ which means the finished array is part of the saved image: the core pays nothing
 for it at startup. That is also why no snapshot format change was needed, and
 why the 1.6GB snapshot did not have to be regenerated.
 
-Measured over 3000 lines of `the 350k-character magazine sample`:
+Measured over 3000 lines of the 350k-character magazine sample:
 
     kana_text   3079757 entries   158 buckets   log2 21.55 -> 13.89 comparisons
     kanji_text  5331635 entries  5682 buckets   log2 22.35 -> 10.97 comparisons
@@ -273,16 +273,16 @@ Per line, small corpora (milliseconds):
 | corpus | lines | db | ram | core |
 |---|---|---|---|---|
 | golden-corpus | 382 | 51.74 | 1.27 | 1.27 |
-| vn-paragraphs | 39 | 53.87 | 1.51 | 1.54 |
-| vn-paragraphs2 | 84 | 67.83 | 1.66 | 1.91 |
+| visual-novel batch 1 | 39 | 53.87 | 1.51 | 1.54 |
+| visual-novel batch 2 | 84 | 67.83 | 1.66 | 1.91 |
 
 RAM and core are 35x to 41x the database rate. Whole-process wall time (SBCL
-startup plus dictionary load included): golden 88.5s / 9.0s / 3.3s, vn-paragraphs
-14.0s / 7.0s / 1.6s, vn-paragraphs2 29.4s / 7.1s / 2.0s. Time to the first answer
+startup plus dictionary load included): golden 88.5s / 9.0s / 3.3s, visual-novel
+batch 1 14.0s / 7.0s / 1.6s, batch 2 29.4s / 7.1s / 2.0s. Time to the first answer
 is where the core shows most: 23.0s / 0.97s / 0.54s on golden, and the core is
 ready in a flat 1.27s because it loads nothing.
 
-The 350k magazine (18,939 lines, 335,008 characters) is out of range for the
+The 350k-character magazine sample (18,939 lines, 335,008 characters) is out of range for the
 database at about 52 ms per line, which is roughly 16 minutes, so it was run on
 RAM and core only:
 

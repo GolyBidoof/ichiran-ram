@@ -11,8 +11,10 @@ measured and then thrown away, and why the parity harnesses were built before
 most of the speed work rather than after.
 
 Measurements are per line of text unless stated. The two reference corpora are
-the golden corpus (382 lines, the parity contract) and the 350k magazine
-(18,939 lines, 335,008 characters, the throughput workload).
+the golden corpus (382 lines, the parity contract) and a 350k-character magazine
+sample (18,939 lines, 335,008 characters, the throughput workload). The
+throughput corpora are not distributed with this repository; see the note at the
+end of this file.
 
 ## 1. Foundation: make the work measurable (C0)
 
@@ -184,12 +186,12 @@ All measured on the same machine, `romanize` per line, best of three.
 | Corpus | Lines | Database | RAM | Baked core |
 | --- | --- | --- | --- | --- |
 | golden | 382 | 51.74 ms | 1.27 ms | 1.27 ms |
-| vn-paragraphs | 39 | 53.87 ms | 1.51 ms | 1.54 ms |
-| vn-paragraphs2 | 84 | 67.83 ms | 1.66 ms | 1.91 ms |
+| visual-novel sample, batch 1 | 39 | 53.87 ms | 1.51 ms | 1.54 ms |
+| visual-novel sample, batch 2 | 84 | 67.83 ms | 1.66 ms | 1.91 ms |
 
 Time to the first answer, which is what a caller actually waits for: golden
 23.03s, 0.97s, **0.54s**; the core is ready in a flat 1.27s because it loads
-nothing. On the 350k magazine the database is out of range (about 16 minutes at
+nothing. On the 350k-character magazine sample the database is out of range (about 16 minutes at
 52 ms per line), while RAM and core take 23.8s and 27.3s serially, and 2.29s and
 2.31s with 10 workers, which is 0.121 ms per line and roughly **430x the database
 rate**.
@@ -215,3 +217,23 @@ Three habits, each adopted after being misled:
    comparing against the previous artifact can: after the loader refactor in this
    session, 1.72GB of table data and the whole sense snapshot are byte-identical,
    with only the build stamp differing.
+
+## Benchmark corpora are not distributed
+
+The throughput measurements in this file were taken on large samples of real
+Japanese text (a 350k-character magazine sample, a manga-magazine sample, novel
+prologues and visual-novel dialogue). Those files are third-party material, so
+they are not distributed with this repository and appear in no commit.
+
+Every harness takes its input from the `CORPUS` environment variable and falls
+back to `data/golden-corpus.txt`, which this project authors itself:
+
+```
+CORPUS=/path/to/your/text.txt ./scripts/sbcl-wrapped --non-interactive \
+  --load scripts/bench-lines.lisp --eval '(main)'
+```
+
+Line counts, character counts and timings are quoted above so the numbers stay
+meaningful without the text: a 350k-character sample of magazine prose, dense in
+OCR noise and Latin-alphabet garbage, and small visual-novel and prologue
+samples.

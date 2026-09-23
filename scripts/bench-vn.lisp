@@ -6,7 +6,7 @@
 (defvar *t-sys* (/ (get-internal-real-time) internal-time-units-per-second))
 (defun now () (/ (get-internal-real-time) internal-time-units-per-second))
 (defun vn-lines ()
-  (with-open-file (in (or (uiop:getenv "CORPUS") "the visual-novel sample"))
+  (with-open-file (in (or (uiop:getenv "CORPUS") "data/golden-corpus.txt"))
     (loop for line = (read-line in nil nil)
           while line
           for text = (string-trim (list #\Space #\Tab #\Newline (code-char 12288)) line)

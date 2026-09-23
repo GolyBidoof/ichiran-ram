@@ -4,7 +4,7 @@
 ;;; how the tail behaves, whether the worker pool is balanced, how the score
 ;;; cache warms, and what the collector costs.
 ;;;
-;;;   CORPUS=the novel-prologue sample scripts/sbcl-wrapped \
+;;;   CORPUS=<your corpus> scripts/sbcl-wrapped \
 ;;;     --core local-env/ichiran-serving.core --non-interactive \
 ;;;     --load scripts/audit-stages.lisp --load scripts/bench-lines.lisp \
 ;;;     --eval '(bench-all)' --eval '(sb-ext:quit)'
@@ -22,7 +22,7 @@
 (defvar *err-samples* nil)
 
 (defun lines-vec ()
-  (coerce (lines-of (or (uiop:getenv "CORPUS") "the novel-prologue sample")) 'vector))
+  (coerce (lines-of (or (uiop:getenv "CORPUS") "data/golden-corpus.txt")) 'vector))
 
 (defun ms (ticks) (/ ticks 1000.0))
 

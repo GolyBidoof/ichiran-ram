@@ -8,7 +8,7 @@
 ;;; INCLUSIVE: a parent's share contains its children's. Read the call counts as
 ;;; exact and the times as indicative.
 ;;;
-;;;   CORPUS=the visual-novel prologue sample scripts/sbcl-wrapped \
+;;;   CORPUS=<your corpus> scripts/sbcl-wrapped \
 ;;;     --core local-env/ichiran-serving.core --non-interactive \
 ;;;     --load scripts/audit-stages.lisp --load scripts/audit-calls.lisp \
 ;;;     --eval '(audit-calls)' --eval '(sb-ext:quit)'
@@ -32,7 +32,7 @@
                           (- (get-internal-real-time) t0)))))))
       t)))
 (defun audit-calls ()
-  (let* ((path (or (uiop:getenv "CORPUS") "the visual-novel prologue sample"))
+  (let* ((path (or (uiop:getenv "CORPUS") "data/golden-corpus.txt"))
          (lines (lines-of path))
          (n (length lines)))
     (dolist (l lines) (ichiran:romanize l))

@@ -3,7 +3,7 @@
 # baked core, over every benchmark corpus. Reports wall time end to end (so the
 # cost of STARTING is included) alongside the in-process numbers.
 cd "$(dirname "$0")/.." || exit 1
-CORPORA="${CORPORA:-data/golden-corpus.txt the visual-novel sample the visual-novel sample}"
+CORPORA="${CORPORA:-data/golden-corpus.txt}"
 CORE="${CORE:-local-env/ichiran-serving.core}"
 echo "== corpus | path | wall-to-first-answer | best-of-3 | per-line =="
 for corpus in $CORPORA; do

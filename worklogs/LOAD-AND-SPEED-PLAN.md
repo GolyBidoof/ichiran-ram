@@ -1,6 +1,6 @@
 # Load and throughput: where the time goes and what to do next
 
-Context: the the visual novel dialogue lines (`the visual-novel dialogue sample`) profiled as
+Context: the visual-novel dialogue lines used for profiling profiled as
 a representative workload. Everything below was measured on this machine.
 
 ## What these sentences actually cost
@@ -148,7 +148,7 @@ Ranked:
    memoizing it measured as no help. Dialogue with kanji and proper nouns may
    well call `kanji-mask`/`kanji-regex` per word, and cl-ppcre in this tree has
    **no scanner cache at all**, so each call compiles. Worth instrumenting on
-   `the visual-novel dialogue sample` before writing any code - the earlier lesson was that
+   the visual-novel dialogue corpus before writing any code - the earlier lesson was that
    the sampling profile over-reports this and the A/B is authoritative.
 4. **More workers.** 13 cores are available and the measurement used 8.
 

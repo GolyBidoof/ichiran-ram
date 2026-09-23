@@ -19,7 +19,7 @@
   t)
 
 (defun vn-lines ()
-  (with-open-file (in "the visual-novel dialogue sample")
+  (with-open-file (in (or (uiop:getenv "CORPUS") "data/golden-corpus.txt"))
     (loop for line = (read-line in nil nil)
           while line
           for text = (string-right-trim '(#\Newline #\Return) line)
