@@ -409,6 +409,19 @@
    memdict-table-loaded-p) treats the integer backend as loaded."
   (setf (gethash table *int-tables*) int-table)
   (pushnew table *loaded-tables* :test 'equal)
+  ;; Build the first-character direct index here, before the verification step
+  ;; and its early return, so that both the database path and the snapshot path
+  ;; get it. In a baked core this runs during the BUILD, which means the finished
+  ;; array is part of the saved heap and the core pays nothing for it at startup.
+  ;;
+  ;; Only KANA_TEXT and KANJI_TEXT have a text pool to index. Despite its name
+  ;; this function also registers ENTRY, CONJUGATION, CONJ_PROP and the rest,
+  ;; whose objects are a different structure entirely. Silently skipped when the
+  ;; integer layer is not loaded.
+  (when (member table '("kana_text" "kanji_text") :test 'equal)
+    (let ((build (int-fn 'int-text-build-first-char)))
+      (when build
+        (funcall build int-table))))
   ;; Verify the row count here rather than in memdict-load-int: harnesses and
   ;; the build script also register tables one by one, and a RAM miss is only
   ;; trustworthy (memdict-complete-p) if the count matched the DB. Skipped

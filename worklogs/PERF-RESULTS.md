@@ -185,3 +185,77 @@ calls per line uncached to 13.1 cached.
   even though the run conses 688kB per line.
 - The longest lines cost about 2.4x more per character than the average, so the
   remaining super-linear term sits in candidate count times path search.
+
+## First-character direct indexing (CSR)
+
+The statistical profile put the text lookup clearly on the map:
+
+    COMPARE-POOL-STRING        13.6% self     14.4% total
+    INT-TEXT-POOL-INDEX         1.4% self     16.3% total
+
+A lookup is a binary search in `int-text-pool-index` over `TEXT-ORDER`, which is
+sorted by `STRING<`, and therefore by character code. Every text equal to the
+target must begin with the target's first character, and all texts beginning with
+one character form a contiguous run of that sorted order. So the search can be
+narrowed to one character's run, and a character with no run at all ends the
+lookup outright, which is what Latin text and rare kanji windows hit.
+
+The index is CSR shaped: one flat `(unsigned-byte 32)` vector of 65537 offsets
+per text table, where the texts beginning with BMP code C occupy the half-open
+run `[offsets[C], offsets[C+1])`. Two adjacent array reads replace the first
+comparison rounds, 256KB per table stays in cache, and an empty bucket is free
+because `low == high` skips the loop. Codes outside the BMP have no bucket and
+take the full range.
+
+It is built in `int-register-text-table`, in one pass over the already sorted
+order, before that function's early return for snapshot loads, so both the
+database and snapshot paths get it. A baked core holds these tables in its heap,
+which means the finished array is part of the saved image: the core pays nothing
+for it at startup. That is also why no snapshot format change was needed, and
+why the 1.6GB snapshot did not have to be regenerated.
+
+Measured over 3000 lines of `the 350k-character magazine sample`:
+
+    kana_text   3079757 entries   158 buckets   log2 21.55 -> 13.89 comparisons
+    kanji_text  5331635 entries  5682 buckets   log2 22.35 -> 10.97 comparisons
+
+Both tables bucket their entire contents, so coverage is exact.
+
+Results, all with byte-identical output:
+
+    lookup alone   186966 calls   252.8ms -> 60.9ms   4.15x
+    serial         6000 lines     paired A/B, 6 rounds, 8.9% median
+    parallel       18939 lines    paired A/B, 7.9% mean, 10 workers
+
+Every ON round beat every OFF round in both paired tests.
+
+A methodology note, because it nearly produced a wrong conclusion: comparing
+whole benchmark runs across two cores does NOT resolve an effect this size. The
+same core varied by 6% run to run (0.986 to 1.107 ms per line serial), which is
+wider than the gain. Running the benchmark once per core suggested the parallel
+path had regressed, and it had not: the paired in-process A/B, toggling the slot
+between the saved array and an empty one, shows a consistent 7.9% win. Toggling
+rather than rebuilding the array matters too, because rebuilding touches all 8.4M
+entries and evicts the caches that the next measurement depends on.
+
+### Two bugs the RAM test caught before any core rebuild
+
+Both were found by loading the snapshot on the RAM path rather than by building
+a core and debugging the result:
+
+  * the defstruct default `#()` is a SIMPLE-VECTOR, which fails the new slot's
+    `(simple-array (unsigned-byte 32) (*))` declaration. Every construction path
+    that omits the slot signalled a type error, the snapshot loader included. The
+    default has to be built with the element type.
+  * `int-register-text-table` despite its name also registers `entry`,
+    `conjugation`, `conj_prop` and the rest, whose objects are a different
+    structure. The hook is narrowed to `kana_text` and `kanji_text`, and the
+    builder refuses anything that is not an `int-text-table`.
+
+Validation on RAM before rebuilding: 71999 probes (sampled pool texts, their
+one-character extensions and suffixes, the empty string, ASCII, and BMP and
+non-BMP characters) with 0 mismatches against the unbucketed search, and 0 JSON
+differences over 6000 lines with the index on and off.
+
+`scripts/ram-parity.sh` still reports RAM_PARITY_OK against the database
+baseline.
