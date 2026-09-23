@@ -63,7 +63,11 @@
   :serial t
   :components ((:file "src/trie")
                (:file "src/memdict-compact")
-               (:file "src/memdict-compact-shims")))
+               (:file "src/memdict-int")
+               (:file "src/memdict-compact-shims")
+               ;; Thread-parallel serving. Loads last: it specialises on the
+               ;; analyzer's caches and calls ichiran:romanize.
+               (:file "src/serve-parallel")))
 
 
 #+sb-core-compression
