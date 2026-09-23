@@ -12,7 +12,11 @@
 #   ./scripts/serve-system.sh < corpus.txt > out.txt
 #   CORE=local-env/other.core ./scripts/serve-system.sh
 #
-# Protocol: the server prints {"ready":true} when warm; clients MUST ignore
+# Parallel by default: WORKERS=8 ./scripts/serve-system.sh (default one per
+# core minus one). SERIAL=1 forces the single-threaded loop. Output order
+# always matches input order.
+#
+# Protocol: the server prints {"ready":true,...} when warm; clients MUST ignore
 # every line before it (SBCL prints its startup banner to stdout and --quiet
 # is unusable with --core, so banner suppression is the client's job).
 # Afterwards each stdin line gets exactly one stdout line (romanization or
@@ -37,20 +41,27 @@ cat > "$LOOP_LISP" <<'EOF'
 (in-package :ichiran/serve-system)
 
 (defun main ()
-  (format t "{\"ready\":true}~%")
-  (finish-output)
-  (loop for line = (read-line *standard-input* nil nil)
-        while line
-        for text = (string-trim '(#\Space #\Tab #\Newline) line)
-        do (format t "~a~%" (if (zerop (length text))
-                                ""
-                                (handler-case (ichiran:romanize text)
-                                  (error (e) (format nil "ERROR: ~a" e)))))
-           (finish-output)))
+  ;; SERIAL=1 keeps the single-threaded loop (useful for bisecting and for
+  ;; machines where the worker copies of the memo tables cost too much).
+  (if (uiop:getenv "SERIAL")
+      (progn
+        (format t "{\"ready\":true,\"workers\":1}~%")
+        (finish-output)
+        (loop for line = (read-line *standard-input* nil nil)
+              while line
+              for text = (string-trim '(#\Space #\Tab #\Newline) line)
+              do (format t "~a~%" (if (zerop (length text))
+                                      ""
+                                      (handler-case (ichiran:romanize text)
+                                        (error (e) (format nil "ERROR: ~a" e)))))
+                 (finish-output)))
+      ;; Parallel: one worker per core, output in input order.
+      (ichiran/serve-parallel:serve-stream)))
 EOF
 
 echo "serve-system.sh: serving from $CORE ..." >&2
 scripts/sbcl-wrapped --dynamic-space-size 8192 --core "$CORE" \
   --non-interactive \
+  --load src/serve-parallel.lisp \
   --load "$LOOP_LISP" \
   --eval '(ichiran/serve-system:main)'
