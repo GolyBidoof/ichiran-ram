@@ -2027,6 +2027,14 @@
                  (find (text kanji-reading) restr :test 'equal)
                  t)))))
 
+(defun ram-restricted-readings-available-p ()
+  "T when RESTRICTED_READINGS has been installed in RAM."
+  (and *memdict-p*
+       (find-package :ichiran/memdict-compact)
+       (let ((f (find-symbol "MEMDICT-RESTRICTED-READINGS-LOADED-P"
+                             :ichiran/memdict-compact)))
+         (and f (fboundp f) (funcall f)))))
+
 (defun match-sense-restrictions (seq props reading)
   (let ((stagk (cdr (assoc "stagk" props :test 'equal)))
         (stagr (cdr (assoc "stagr" props :test 'equal)))
@@ -2036,13 +2044,34 @@
                (member (text reading) stagr :test 'equal)) t)
           ((and (not stagr) (eql wtype :kanji)) nil)
           ((and (not stagk) (eql wtype :kana)) nil)
-          (t (let ((restricted (query (:select 'reading 'text :from 'restricted-readings :where (:= 'seq seq)))))
+          ;; STAGK and STAGR are usually a list of texts, but a single
+          ;; restriction arrives as a bare string. The database path never
+          ;; cared, because (:set "すみ") compiles to (text IN (E'すみ')), one
+          ;; value, so the RAM filter has to normalise the same way. Without
+          ;; this, (member (text r) "隅") signals "not of type LIST".
+          (t (let* ((restricted (if (ram-restricted-readings-available-p)
+                                    (memdict-call 'memdict-restricted-readings seq)
+                                    (query (:select 'reading 'text :from 'restricted-readings
+                                                    :where (:= 'seq seq)))))
+                    (stagr (if (listp stagr) stagr (list stagr)))
+                    (stagk (if (listp stagk) stagk (list stagk))))
                (case wtype
                  (:kanji
-                  (let ((rkana (select-dao 'kana-text (:and (:= 'seq seq) (:in 'text (:set stagr))))))
+                  ;; R10: the rows and the restriction pairs both come from RAM
+                  ;; now, so this last connection-dependent path is gone. The
+                  ;; DAO branch filters on text membership the same way.
+                  (let ((rkana (if (memdict-table-loaded-p "kana_text")
+                                   (remove-if-not
+                                    (lambda (r) (member (text r) stagr :test 'equal))
+                                    (memdict-call 'memdict-rows-by-seq 'kana-text seq))
+                                   (select-dao 'kana-text (:and (:= 'seq seq) (:in 'text (:set stagr)))))))
                     (some (lambda (rk) (match-kana-kanji rk reading restricted)) rkana)))
                  (:kana
-                  (let ((rkanji (select-dao 'kanji-text (:and (:= 'seq seq) (:in 'text (:set stagk))))))
+                  (let ((rkanji (if (memdict-table-loaded-p "kanji_text")
+                                    (remove-if-not
+                                     (lambda (r) (member (text r) stagk :test 'equal))
+                                     (memdict-call 'memdict-rows-by-seq 'kanji-text seq))
+                                    (select-dao 'kanji-text (:and (:= 'seq seq) (:in 'text (:set stagk)))))))
                     (some (lambda (rk) (match-kana-kanji reading rk restricted)) rkanji)))))))))
 
 

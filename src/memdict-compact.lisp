@@ -19,6 +19,8 @@
            #:memdict-senses-raw #:memdict-non-arch-posi #:memdict-uk
            #:memdict-entry-by-seq #:memdict-conj-data #:memdict-has-conj-p
            #:memdict-conj-from-via #:memdict-max-seq
+           #:memdict-set-restricted-readings #:memdict-restricted-readings
+           #:memdict-restricted-readings-loaded-p
            #:memdict-reset #:memdict-loaded-tables
            ;; R6 residual-query helpers (reading-str/short-sense/conj lists)
            #:memdict-text-by-seq #:memdict-find-by-seq-text
@@ -822,6 +824,31 @@
         (when first
           (let ((gs (memdict-glosses-by-sense (compact-sense-id first))))
             (when gs (join-strings "; " (mapcar 'cdr gs)))))))))
+
+(defvar *restricted-readings* (make-hash-table :test 'eql)
+  "seq -> list of (reading . restricted-text), mirroring the restricted_readings
+   table. That table is not one of the resident dictionary tables: it comes
+   from JMdict's re_restr tags, so it is installed separately at load time.")
+
+(defun memdict-set-restricted-readings (rows)
+  "Install ROWS, a list of (seq reading text), replacing any previous set.
+   Returns the number of seqs covered. The table is 6,332 rows."
+  (clrhash *restricted-readings*)
+  (dolist (r rows)
+    (destructuring-bind (seq reading text) r
+      ;; A proper two element list, not a dotted pair: MATCH-KANA-KANJI reads
+      ;; these with (loop for (rt kt) in restricted ...), which destructures as
+      ;; a list, so a dotted pair fails when it reaches the second element.
+      (push (list reading text) (gethash seq *restricted-readings*))))
+  (hash-table-count *restricted-readings*))
+
+(defun memdict-restricted-readings (seq)
+  "List of (reading . text) for SEQ, or NIL. Same pairs, in the same shape per
+   row, as SELECT reading, text FROM restricted_readings WHERE seq = SEQ."
+  (gethash seq *restricted-readings*))
+
+(defun memdict-restricted-readings-loaded-p ()
+  (plusp (hash-table-count *restricted-readings*)))
 
 (defun memdict-max-seq ()
   "Largest seq in the loaded dictionary, or 0. Used to size the flat,
