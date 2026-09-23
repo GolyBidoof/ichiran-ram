@@ -109,10 +109,13 @@
         (pool "" kanjis-pool kanji-pool-idx)
         (pool "" kanas-pool kana-pool-idx)
         (postmodern:with-connection conn
-          (loop with offset = 0
+          ;; Keyset pagination, not LIMIT/OFFSET: with OFFSET k Postgres
+          ;; re-scans and discards k rows for every chunk, which is quadratic
+          ;; (conj_source_reading needs 42 chunks for its 8.4M rows).
+          (loop with last-id = -1
                 for rows = (postmodern:query
-                            (format nil "SELECT id, seq, text, ord, common, common_tags, conjugate_p, nokanji, ~a FROM ~a ORDER BY id LIMIT ~a OFFSET ~a"
-                                    best-col table chunk offset)
+                            (format nil "SELECT id, seq, text, ord, common, common_tags, conjugate_p, nokanji, ~a FROM ~a WHERE id > ~a ORDER BY id LIMIT ~a"
+                                    best-col table last-id chunk)
                             :lists)
                 while rows
                 do (dolist (pl rows)
@@ -136,7 +139,7 @@
                                (progn (vector-push-extend 0 kanji-ids)
                                       (vector-push-extend (pool best kanas-pool kana-pool-idx) kana-ids))))
                          (when (> seq max-seq) (setf max-seq seq)))))
-                   (incf offset chunk))))
+                   (setf last-id (caar (last rows))))))
         ;; Freeze columns (explicit copies: fill-pointer semantics of
         ;; coerce are implementation-subtle; replace respects active length).
         (let* ((n (fill-pointer ids))
@@ -374,10 +377,10 @@
                        (setf (gethash s content-index) i)
                        i))))
         (postmodern:with-connection conn
-          (loop with offset = 0
+          (loop with last-seq = -1
                 for rows = (postmodern:query
-                            (format nil "SELECT seq, content, root_p, n_kanji, n_kana, primary_nokanji FROM entry ORDER BY seq LIMIT ~a OFFSET ~a"
-                                    chunk offset)
+                            (format nil "SELECT seq, content, root_p, n_kanji, n_kana, primary_nokanji FROM entry WHERE seq > ~a ORDER BY seq LIMIT ~a"
+                                    last-seq chunk)
                             :lists)
                 while rows
                 do (dolist (pl rows)
@@ -390,7 +393,7 @@
                        (vector-push-extend n-kanji nkanji)
                        (vector-push-extend n-kana nkana)
                        (when (> seq max-seq) (setf max-seq seq))))
-                   (incf offset chunk))))
+                   (setf last-seq (caar (last rows))))))
         (let* ((n (fill-pointer seqs))
                (freeze (lambda (v et) (let ((out (make-array n :element-type et)))
                                         (replace out v))))
@@ -485,10 +488,10 @@
           (vias (make-array 2400000 :element-type '(signed-byte 32)
                             :fill-pointer 0 :adjustable t)))
       (postmodern:with-connection conn
-        (loop with offset = 0
+        (loop with last-id = -1
               for rows = (postmodern:query
-                          (format nil "SELECT id, seq, \"from\", via FROM conjugation ORDER BY id LIMIT ~a OFFSET ~a"
-                                  chunk offset)
+                          (format nil "SELECT id, seq, \"from\", via FROM conjugation WHERE id > ~a ORDER BY id LIMIT ~a"
+                                  last-id chunk)
                           :lists)
               while rows
               do (dolist (pl rows)
@@ -497,7 +500,7 @@
                      (vector-push-extend seq seqs)
                      (vector-push-extend from froms)
                      (vector-push-extend (if (eql via :null) -1 via) vias)))
-                 (incf offset chunk)))
+                 (setf last-id (caar (last rows)))))
       (let* ((n (fill-pointer ids))
              (ids-v (int-u32-col ids n))
              (seqs-v (int-u32-col seqs n))
@@ -575,10 +578,10 @@
                        (setf (gethash s idx) i)
                        i))))
         (postmodern:with-connection conn
-          (loop with offset = 0
+          (loop with last-id = -1
                 for rows = (postmodern:query
-                            (format nil "SELECT id, conj_id, conj_type, pos, neg, fml FROM conj_prop ORDER BY id LIMIT ~a OFFSET ~a"
-                                    chunk offset)
+                            (format nil "SELECT id, conj_id, conj_type, pos, neg, fml FROM conj_prop WHERE id > ~a ORDER BY id LIMIT ~a"
+                                    last-id chunk)
                             :lists)
                 while rows
                 do (dolist (pl rows)
@@ -588,7 +591,7 @@
                        (vector-push-extend (pool conj-type types type-index) type-ids)
                        (vector-push-extend (pool pos poss pos-index) pos-ids)
                        (vector-push-extend (logior (if neg 1 0) (if fml 2 0)) flags)))
-                   (incf offset chunk))))
+                   (setf last-id (caar (last rows))))))
       (let* ((n (fill-pointer ids))
              (ids-v (int-u32-col ids n))
              (conj-v (int-u32-col conj-ids n))
@@ -652,10 +655,10 @@
                        (setf (gethash s idx) i)
                        i))))
         (postmodern:with-connection conn
-          (loop with offset = 0
+          (loop with last-id = -1
                 for rows = (postmodern:query
-                            (format nil "SELECT id, conj_id, text, source_text FROM conj_source_reading ORDER BY id LIMIT ~a OFFSET ~a"
-                                    chunk offset)
+                            (format nil "SELECT id, conj_id, text, source_text FROM conj_source_reading WHERE id > ~a ORDER BY id LIMIT ~a"
+                                    last-id chunk)
                             :lists)
                 while rows
                 do (dolist (pl rows)
@@ -664,7 +667,7 @@
                        (vector-push-extend conj-id conj-ids)
                        (vector-push-extend (pool text texts text-index) text-ids)
                        (vector-push-extend (pool source-text srcs src-index) src-ids)))
-                   (incf offset chunk))))
+                   (setf last-id (caar (last rows))))))
       (let* ((n (fill-pointer ids))
              (ids-v (int-u32-col ids n))
              (conj-v (int-u32-col conj-ids n))
