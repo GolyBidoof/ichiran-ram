@@ -2,7 +2,21 @@
 
 ## Unreleased
 
-- **`scripts/serve-snapshot.sh`**: full-dictionary serving on a 16GB machine
+- **The benchmark corpora are no longer in this repository**, in the working
+  tree or in any commit. They were third-party text and could not be
+  distributed, so all references are anonymized: line counts, character counts
+  and timings are kept, the titles are not. Every harness now takes its input
+  from `CORPUS` and defaults to `data/golden-corpus.txt`, which this project
+  authors itself. See docs/PERFORMANCE-HISTORY.md.
+- **README rewritten** as a user guide: quick start for Docker and for a local
+  install, the fast path in three steps, a command-for-command migration table
+  from upstream ichiran, and the three verification gates.
+- `scripts/sbcl-wrapped` no longer hardcodes Homebrew's SBCL path. It honors
+  `SBCL=`, then `/opt/homebrew/bin/sbcl`, then SBCL on `PATH`, and it falls back
+  to `~/quicklisp/setup.lisp` when `local-env/quicklisp` is absent, so a fresh
+  clone runs on Linux too. `scripts/bench-all.sh` accepts `CORPUS` as well as
+  `CORPORA`.
+- `scripts/serve-snapshot.sh`: full-dictionary serving on a 16GB machine
   without a baked core. `serve-system.sh` needs a saved core and baking the
   full dictionary into one needs a 32GB+ host, so nothing on this machine
   could serve the complete RAM dictionary; this boots it from the snapshot

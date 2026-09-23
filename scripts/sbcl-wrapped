@@ -12,6 +12,28 @@ export XDG_CACHE_HOME="$PWD/local-env/cache"
 export QUICKLISP_HOME="$PWD/local-env/quicklisp"
 mkdir -p "$XDG_CACHE_HOME" "$QUICKLISP_HOME"
 
+# SBCL binary: honor $SBCL, else Homebrew's usual location, else whatever is on
+# PATH. A machine with Homebrew SBCL behaves exactly as before.
+SBCL_BIN="${SBCL:-}"
+if [ -z "$SBCL_BIN" ]; then
+  if [ -x /opt/homebrew/bin/sbcl ]; then SBCL_BIN=/opt/homebrew/bin/sbcl
+  else SBCL_BIN="$(command -v sbcl 2>/dev/null || true)"; fi
+fi
+if [ -z "$SBCL_BIN" ] || [ ! -x "$SBCL_BIN" ]; then
+  echo "sbcl-wrapped: no usable SBCL (SBCL='${SBCL:-}' resolved to '${SBCL_BIN:-}')." >&2
+  echo "  Install SBCL, or set SBCL=/path/to/sbcl." >&2
+  exit 127
+fi
+
+# Quicklisp setup: the workspace copy when present, else the user's own install,
+# so a fresh clone works without hand-building local-env/quicklisp.
+QL_SETUP="$PWD/local-env/quicklisp/setup.lisp"
+[ -f "$QL_SETUP" ] || QL_SETUP="$HOME/quicklisp/setup.lisp"
+if [ ! -f "$QL_SETUP" ]; then
+  echo "sbcl-wrapped: no quicklisp setup.lisp (looked in local-env/quicklisp and ~/quicklisp)." >&2
+  exit 127
+fi
+
 runtime=(--dynamic-space-size 4096)
 rest=()
 user_space=""
@@ -48,8 +70,8 @@ fi
 
 if [ -n "$using_core" ]; then
   # Core image already has quicklisp + the dict; don't load setup.lisp.
-  exec /opt/homebrew/bin/sbcl "${runtime[@]}" "${rest[@]}"
+  exec "$SBCL_BIN" "${runtime[@]}" "${rest[@]}"
 else
-  exec /opt/homebrew/bin/sbcl "${runtime[@]}" \
-    --no-userinit --load "$PWD/local-env/quicklisp/setup.lisp" "${rest[@]}"
+  exec "$SBCL_BIN" "${runtime[@]}" \
+    --no-userinit --load "$QL_SETUP" "${rest[@]}"
 fi

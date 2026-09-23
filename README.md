@@ -1,174 +1,367 @@
-# Ichiran
+# Ichiran RAM
 
-Ichiran is a collection of tools for working with text in Japanese language. It contains experimental segmenting and romanization algorithms and uses open source [JMdictDB](http://edrdg.org/~smg/) dictionary database to display meanings of words.
+Ichiran reads Japanese text, splits it into words, and romanizes it, using the
+[JMdictDB](http://edrdg.org/~smg/) dictionary for meanings. This fork keeps the
+same analysis and the same commands, and adds an **in-RAM dictionary**, so the
+same answers can be served without PostgreSQL at all.
 
-The web interface is under development right now. You can try it at [ichi.moe](http://ichi.moe).
+Upstream project: [tshatrov/ichiran](https://github.com/tshatrov/ichiran) by
+Timofei Shatrov. This fork is maintained by
+[GolyBidoof](https://github.com/GolyBidoof). Both are MIT licensed.
 
-## Installation
+## The short version
 
-**!!!NEW!!!** There's now a [blog post](https://readevalprint.tumblr.com/post/639359547843215360/ichiranhome-2021-the-ultimate-guide) which contains detailed instructions how to get Ichiran running on Linux and Windows. It also describes how to use the new `ichiran-cli` command line interface!
+Upstream ichiran asks PostgreSQL for every word, reading, and meaning while it
+analyzes a sentence, which is thousands of queries per sentence. This fork can
+load those same tables into RAM once and answer from memory.
 
-1. Download JMDict data from [here](https://gitlab.com/yamagoya/jmdictdb/-/tree/master/jmdictdb/data). If you want to initialize database from scratch download [JMDict](ftp://ftp.monash.edu.au/pub/nihongo/JMdict.gz), and optionally [kanjidic2.xml](http://www.csse.monash.edu.au/~jwb/kanjidic2/kanjidic2.xml.gz) to use ichiran/kanji functionality.
-2. Create a settings.lisp file based on the provided settings.lisp.template file with the correct paths to the abovementioned files and the database connection parameters.
-3. The code can be loaded as a regular ASDF system. Use quicklisp to easily install all the dependencies.
-4. - Easy mode: Use database dump from [the release page](https://github.com/tshatrov/ichiran/releases) to create a suitable database. Make sure `settings.lisp` contains the correct connection parameters. Use `(ichiran/maintenance:add-errata)` to make database up to date.
-   - Hard mode: Use `(ichiran/maintenance:full-init)` to completely initialize the database. Use `(ichiran/maintenance:load-jmdict)` followed by `(ichiran/maintenance:load-best-readings)` to initialize only `ichiran/dict` and not `ichiran/kanji`. Either way, this will take a few hours or so.
-5. Use `(ichiran/test:run-all-tests)` to check that the installation satisfies the tests.
-6. Before using any word segmenting functionality, run `(ichiran/dict:init-suffixes t)` to create a suffix cache, which will improve the quality of segmentation.
+| | PostgreSQL | RAM snapshot | Baked core |
+| --- | --- | --- | --- |
+| One line, warm (382-line corpus) | 51.7 ms | **1.27 ms** | **1.27 ms** |
+| Whole corpus run, startup included | 88.5 s | 9.0 s | **3.3 s** |
+| Ready to answer, before any input | about 69 s | about 8.5 s | **about 1.3 s** |
+| One line, 10 worker threads (18,939 lines) | not measured | **0.121 ms** | 0.122 ms |
+| Database needed while serving | yes | **no** | **no** |
+| Answers | baseline | byte-identical | byte-identical |
 
-## Dockerized version
+Same machine, `romanize` per line, best of three runs. See
+[Verification](#verification) for how the equality is checked, and
+[docs/PERFORMANCE-HISTORY.md](docs/PERFORMANCE-HISTORY.md) for every measurement
+and for the ideas that were tried and rejected.
 
-Build (executed from the root of this repo):
+**Nothing changes unless you ask for it.** Every fast path sits behind a flag
+that defaults to off. With the flags off, every lookup goes to PostgreSQL and the
+output matches the recorded baseline, which `scripts/golden-diff.sh` checks. If
+you just want ichiran, you can use this fork exactly as you use upstream, and
+skip the rest of this file.
 
-```
-docker compose build
-```
+## Contents
 
-Start containers (this will take longer for the first time, because the db will get imported from the dump here, and other ichiran initializations will also get done here):
+- [Quick start](#quick-start)
+  - [Option A: Docker, nothing to install](#option-a-docker-nothing-to-install)
+  - [Option B: local SBCL and PostgreSQL](#option-b-local-sbcl-and-postgresql)
+  - [Option C: turn on the fast path](#option-c-turn-on-the-fast-path)
+- [Using it](#using-it)
+- [How this differs from upstream ichiran](#how-this-differs-from-upstream-ichiran)
+- [Migrating from ichiran](#migrating-from-ichiran)
+- [Verification](#verification)
+- [Requirements and what it costs](#requirements-and-what-it-costs)
+- [Troubleshooting](#troubleshooting)
+- [Documentation](#documentation)
+- [Credits and license](#credits-and-license)
 
-```
-docker compose up
-```
+## Quick start
 
-This will likely take several minutes, and may print a few warnings about pre-existing tables or WAL (write-ahead log) or vacuum tasks, which are safe to ignore. You may monitor the size of the database in another terminal via `du -h -d0 docker/pgdata` as it grows to around 4.7 GB. Eventually, the database will be fully restored and the `ichiran` container will start and say, "All set, awaiting commands."
+### Option A: Docker, nothing to install
 
-If there were errors while importing db, or you want to import a new database you need to delete postgres data, so the postgres docker initdb scripts get called (if the folder is not empty it won't get called), and after this you can call `docker compose up` again:
+The fastest way to a working install. It downloads a prepared JMdictDB dump, so
+you do not need to build the dictionary yourself.
 
-```
-sudo rm -rf docker/pgdata
-```
-
-Test suite:
-
-```
-$ docker exec -it ichiran-main-1 test-suite
-This is SBCL 2.2.4, an implementation of ANSI Common Lisp.
-More information about SBCL is available at <http://www.sbcl.org/>.
-
-SBCL is free software, provided as is, with absolutely no warranty.
-It is mostly in the public domain; some portions are provided under
-BSD-style licenses.  See the CREDITS and COPYING files in the
-distribution for more information.
-......................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
-Unit Test Summary
- | 748 assertions total
- | 748 passed
- | 0 failed
- | 0 execution errors
- | 0 missing tests
-```
-
-Enter the sbcl interpreter (with ichiran already initialized):
-
-```
-$ docker exec -it ichiran-main-1 ichiran-sbcl
-This is SBCL 2.2.4, an implementation of ANSI Common Lisp.
-More information about SBCL is available at <http://www.sbcl.org/>.
-
-SBCL is free software, provided as is, with absolutely no warranty.
-It is mostly in the public domain; some portions are provided under
-BSD-style licenses.  See the CREDITS and COPYING files in the
-distribution for more information.
-* (romanize "一覧は最高だぞ" :with-info t)
-"ichiran wa saikō da zo"
-(("ichiran" . "一覧 【いちらん】
-1. [n,vs] look; glance; sight; inspection
-2. [n] summary; list; table; catalog; catalogue")
- ("wa" . "は
-1. [prt] 《pronounced わ in modern Japanese》 indicates sentence topic
-2. [prt] indicates contrast with another option (stated or unstated)
-3. [prt] adds emphasis")
- ("saikō" . "最高 【さいこう】
-1. [adj-no,adj-na,n] best; supreme; wonderful; finest
-2. [n,adj-na,adj-no] highest; maximum; most; uppermost; supreme")
- ("da" . "だ
-1. [cop,cop-da] 《plain copula》 be; is
-2. [aux-v] 《た after certain verb forms; indicates past or completed action》 did; (have) done
-3. [aux-v] 《indicates light imperative》 please; do")
- ("zo" . "ぞ
-1. [prt] 《used at sentence end》 adds force or indicates command"))
-* (ichiran:romanize "一覧は最高だぞ" :with-info t)
-"ichiran wa saikō da zo"
-(("ichiran" . "一覧 【いちらん】
-1. [n,vs] look; glance; sight; inspection
-2. [n] summary; list; table; catalog; catalogue")
- ("wa" . "は
-1. [prt] 《pronounced わ in modern Japanese》 indicates sentence topic
-2. [prt] indicates contrast with another option (stated or unstated)
-3. [prt] adds emphasis")
- ("saikō" . "最高 【さいこう】
-1. [adj-no,adj-na,n] best; supreme; wonderful; finest
-2. [n,adj-na,adj-no] highest; maximum; most; uppermost; supreme")
- ("da" . "だ
-1. [cop,cop-da] 《plain copula》 be; is
-2. [aux-v] 《た after certain verb forms; indicates past or completed action》 did; (have) done
-3. [aux-v] 《indicates light imperative》 please; do")
- ("zo" . "ぞ
-1. [prt] 《used at sentence end》 adds force or indicates command"))
-*
+```sh
+git clone https://github.com/GolyBidoof/ichiran-ram.git
+cd ichiran-ram
+docker compose build          # a few minutes the first time
+docker compose up             # imports the database, then idles, ready for commands
 ```
 
-Ichiran cli:
+The first `up` is the slow one: it restores a 4.7GB database. Watch it grow with
+`du -h -d0 docker/pgdata` in another terminal. When it says "All set, awaiting
+commands", you are ready:
 
+```sh
+docker exec -it ichiran-main-1 ichiran-cli -i "一覧は最高だぞ"   # CLI
+docker exec -it ichiran-main-1 test-suite                        # test suite
+docker exec -it ichiran-main-1 ichiran-sbcl                      # a Lisp REPL
 ```
-$ docker exec -it ichiran-main-1 ichiran-cli -i "一覧は最高だぞ"
-ichiran wa saikō da zo
 
-* ichiran  一覧 【いちらん】
-1. [n,vs] look; glance; sight; inspection
-2. [n] summary; list; table; catalog; catalogue
+Give Docker Desktop at least 8GB of memory before attempting
+[Option C](#option-c-turn-on-the-fast-path) inside the container.
 
-* wa  は
-1. [prt] 《pronounced わ in modern Japanese》 indicates sentence topic
-2. [prt] indicates contrast with another option (stated or unstated)
-3. [prt] adds emphasis
+### Option B: local SBCL and PostgreSQL
 
-* saikō  最高 【さいこう】
-1. [adj-no,adj-na,n] best; supreme; wonderful; finest
-2. [n,adj-na,adj-no] highest; maximum; most; uppermost; supreme
+Use this if you want ichiran inside your own Lisp, or if you want the fast path
+on the same machine as the database.
 
-* da  だ
-1. [cop,cop-da] 《plain copula》 be; is
-2. [aux-v] 《た after certain verb forms; indicates past or completed action》 did; (have) done
-3. [aux-v] 《indicates light imperative》 please; do
+1. Install **SBCL**, **[quicklisp](https://www.quicklisp.org/beta/)**, and
+   **PostgreSQL 16**.
+2. Put this checkout where ASDF can find it, for example:
 
-* zo  ぞ
-1. [prt] 《used at sentence end》 adds force or indicates command
+   ```sh
+   ln -s "$PWD" "$HOME/quicklisp/local-projects/ichiran"
+   ```
+
+3. Create `settings.lisp` from `settings.lisp.template` and fill in your
+   database connection, or skip the file and use the environment variables
+   `ICHIRAN_DB_NAME`, `ICHIRAN_DB_USER`, `ICHIRAN_DB_PASSWORD`, and
+   `ICHIRAN_DB_HOST` (defaults: `jmdict`, `jmdict`, `password`, `localhost`).
+4. Create the database, either from the [upstream dump](https://github.com/tshatrov/ichiran/releases)
+   or from scratch:
+
+   ```lisp
+   (ql:quickload :ichiran)
+   (ichiran/maintenance:full-init)          ; hours, or load a dump instead
+   (ichiran/dict:init-suffixes t)           ; build the suffix cache, do not skip
+   (ichiran/test:run-all-tests)             ; check the install
+   ```
+
+5. Run it:
+
+   ```lisp
+   (ichiran:romanize "一覧は最高だぞ" :with-info t)
+   ```
+
+The scripts in `scripts/` go through `scripts/sbcl-wrapped`, which keeps all
+SBCL and quicklisp state inside the checkout (so nothing lands in `$HOME`). It
+finds SBCL on your `PATH`, or you can point it at one with
+`SBCL=/path/to/sbcl`. It looks for quicklisp in `local-env/quicklisp` first and
+falls back to `~/quicklisp`.
+
+### Option C: turn on the fast path
+
+This is the reason the fork exists. You need a working database first, because
+the snapshot is built from it once. After that, no database is needed.
+
+```sh
+# 1. Write the dictionary to disk once (a few minutes, and it needs the DB).
+./scripts/build-snapshot.sh
+#    local-env/ichiran-int.snap      1.7GB, the six core tables
+#    local-env/ichiran-sense.snap     27MB, meanings and glosses
+
+# 2. Serve from it. ~8.5s to boot, then ~1.3ms per line, zero queries.
+./scripts/serve-snapshot.sh
 ```
+
+If you would rather not wait ~8.5s at boot, bake a core. The core is a saved
+Lisp image with the analyzer and the whole dictionary already inside it, so it
+starts in about 1.3 seconds and never touches the database.
+
+```sh
+# 3. Bake a core (needs about 8GB of RAM free, one time).
+PRESET=full-ram SYSTEM=1 ./scripts/build-image.sh
+#    local-env/ichiran-serving.core  ~492MB
+
+# 4. Serve from the core, with 10 worker threads, zero database.
+CORE=local-env/ichiran-serving.core ./scripts/serve-system.sh
+```
+
+Both servers read one text per line on stdin and write one result per line on
+stdout, in the same order:
+
+```sh
+echo "一覧は最高だぞ" | CORE=local-env/ichiran-serving.core ./scripts/serve-system.sh
+printf '日本語のテキスト\nもう一行\n' | ./scripts/serve-snapshot.sh
+./scripts/serve-snapshot.sh < mytext.txt > romaji.txt
+SERIAL=1 ./scripts/serve-snapshot.sh     # single thread, for debugging
+WORKERS=4 CORE=... ./scripts/serve-system.sh
+```
+
+The server prints a line containing `{"ready":true}` when it is warm. Ignore
+everything before that line: SBCL prints its banner to stdout, and it cannot be
+suppressed when a core image is used. After the ready line, one input line gives
+exactly one output line.
+
+## Using it
+
+**Command line.** Identical to upstream, plus one new flag.
+
+```sh
+ichiran-cli "一覧は最高だぞ"              # romanization plus word info
+ichiran-cli -i "一覧は最高だぞ"           # the same, spelled out
+ichiran-cli -f -l 5 "一覧は最高だぞ"      # full split as JSON, 5 alternatives
+ichiran-cli -e '(+ 1 2)'                 # evaluate a Lisp expression
+ichiran-cli --serve                      # persistent JSON daemon, see below
+```
+
+`--serve` is new in this fork. It reads sentences on stdin and writes one line
+of JSON per sentence to stdout, keeping the dictionary load in one long-lived
+process:
+
+```sh
+ichiran-cli --serve < sentences.txt > results.jsonl
+```
+
+**Lisp API.** Unchanged. `ichiran:romanize`, `ichiran:romanize*`,
+`ichiran:init-all-caches`, `ichiran/dict:init-suffixes`, and the rest keep their
+names, arguments, and return values. See [cli.lisp](cli.lisp) and
+[romanize.lisp](romanize.lisp).
+
+**In your own process, opt in to RAM.** Load the extra system, load the layers,
+then flip the flag:
+
+```lisp
+(ql:quickload :ichiran/ram)
+
+(ichiran/conn:with-db nil
+  (ichiran/memdict-compact:memdict-load-int :snapshot "local-env/ichiran-int.snap")
+  (ichiran/memdict-compact:memdict-load-sense-snapshot
+    "local-env/ichiran-sense.snap" :int-snapshot "local-env/ichiran-int.snap"))
+
+(setf ichiran/dict::*memdict-p* t)        ; route hot lookups to RAM
+(ichiran:romanize "こんにちは")
+```
+
+## How this differs from upstream ichiran
+
+Everything upstream can do, it still does. The differences are additions.
+
+| | Upstream ichiran | This fork |
+| --- | --- | --- |
+| Dictionary source | PostgreSQL on every lookup | PostgreSQL, or RAM, or a baked core |
+| CLI commands | `ichiran-cli`, `-i`, `-f`, `-l`, `-e` | same, plus `--serve` |
+| Lisp API | `romanize`, `romanize*`, ... | same, unchanged |
+| ASDF systems | `:ichiran`, `:ichiran/cli` | same, plus `:ichiran/ram` |
+| Default behavior | database path | **the same database path** |
+| Dependencies | quicklisp libraries | same, no new ones |
+| Database schema | JMdictDB | unchanged, nothing added |
+| Segmentation, scoring, hints, errata | upstream logic | unchanged logic, `dict.lisp` edited only to route lookups |
+| Serving without a database | not possible | snapshot, or a baked core |
+| Parallel serving | not provided | `WORKERS=N`, output stays in input order |
+| Verification gates | test suite | test suite plus three parity gates |
+
+The flags, all default off:
+
+- `ichiran/dict::*memdict-p*` routes hot dictionary lookups to RAM.
+- `ichiran/dict::*use-cache-p*` enables the per-worker memo caches.
+- `ichiran/dict::*trie-p*` enables the optional prefix trie (off, and it was
+  measured to be neutral to slower; see the history document).
+
+If you never set those, you are running ichiran on the database path, exactly as
+before.
+
+## Migrating from ichiran
+
+**Short answer: change nothing.** The commands and the API are the same. Move to
+the fast path one step at a time, and stop wherever you like.
+
+| What you run today | What you run after | Change |
+| --- | --- | --- |
+| `docker compose build`, `docker compose up` | identical | none |
+| `ichiran-cli -i "text"` | identical | none |
+| `(ichiran:romanize "text" :with-info t)` | identical | none |
+| `(ichiran:romanize* "text" :limit 5)` | identical | none |
+| `(ichiran/dict:init-suffixes t)` | identical | none |
+| `(ichiran/test:run-all-tests)` | identical | none |
+| `(ql:quickload :ichiran)` | identical | none |
+| `ichiran-cli --serve` | new | added by this fork |
+| `(ql:quickload :ichiran/ram)` | new | added by this fork |
+
+Suggested order:
+
+1. **Install as usual.** Point your existing setup at this checkout. Your tests
+   and your output should be unchanged, because they are.
+2. **Check the baseline.** `./scripts/parity.sh` should print `PARITY_OK`.
+3. **Build the snapshot.** `./scripts/build-snapshot.sh`. This only reads from
+   your database and writes two files into `local-env/`, which git ignores.
+4. **Serve from RAM.** `./scripts/serve-snapshot.sh`. Compare its output with
+   your database path yourself if you want, or run `./scripts/ram-parity.sh`,
+   which does exactly that comparison over the whole golden corpus.
+5. **Bake a core if you want the fast boot.** `PRESET=full-ram SYSTEM=1
+   ./scripts/build-image.sh`, then `CORE=local-env/ichiran-serving.core
+   ./scripts/serve-system.sh`.
+
+To roll back, stop loading `:ichiran/ram`, delete the files in `local-env/`, and
+unset the flags. The database, the schema, and the upstream source files keep
+working the way they always did.
+
+If you have scripts that call ichiran in a loop, the biggest single win is
+usually not the RAM dictionary but the process: boot one server and feed it
+lines, instead of starting a fresh Lisp for every sentence.
+
+## Verification
+
+The claim "same answers" is checked three ways, and all three are expected to
+pass before anything ships.
+
+| Gate | Command | Passes when |
+| --- | --- | --- |
+| Unit and behavior tests | `./scripts/parity.sh` | prints `PARITY_OK` (820 assertions, 0 failures) |
+| Database output baseline | `./scripts/golden-diff.sh` | prints `GOLDEN_DIFF_OK` |
+| RAM output vs database baseline | `./scripts/ram-parity.sh` | prints `RAM_PARITY_OK` |
+
+`ram-parity.sh` is the important one. It runs the whole golden corpus through
+the RAM path and compares it byte for byte with
+`data/golden-corpus-baseline.json`, which was produced by the database path. It
+exists because the other gates cannot see the RAM code at all.
+
+Each RAM load also checks itself and prints `MEMDICT-VERIFY-OK <table> ram=N
+db=N`, comparing its row count against the database. A `VERIFY-FAIL` means the
+load is corrupt. That gate exists because a paging bug once loaded 1.55M of 2.5M
+rows in silence, and the analyzer answered anyway, with wrong answers.
+
+One honest caveat: the database path is not fully deterministic on a single
+knife-edge sentence, where two segmentations score almost identically. That is
+an upstream property, not a RAM property, and it is why the gates compare
+against a fixed baseline file instead of running the database twice.
+
+## Requirements and what it costs
+
+| | Minimum | Comfortable |
+| --- | --- | --- |
+| Database path only | 4GB RAM | 8GB |
+| RAM snapshot | 10GB RAM | 16GB |
+| Baked full core | 16GB RAM | 24GB |
+| Disk, dictionary | 4.7GB | 5GB |
+| Disk, snapshot | 1.7GB | |
+| Disk, core | 492MB | |
+
+Serving from RAM holds about 8.1GB of dictionary in the heap, so 16GB is the
+practical floor for the full dictionary. `save-lisp-and-die` needs roughly twice
+the dictionary size while writing a core, which is why baking wants headroom.
+
+Build times on the reference machine (Apple Silicon, 16GB): a few minutes for
+the snapshot and a few minutes for a core, and neither needs to be repeated
+unless the dictionary or the table layout changes.
+
+The throughput benchmarks in the history document were taken on large samples of
+third-party Japanese text. Those files are not distributed with this repository
+and appear in no commit. Every harness takes a path from `CORPUS` and defaults to
+`data/golden-corpus.txt`, which this project authors itself:
+
+```sh
+CORPUS=/path/to/your/text.txt ./scripts/bench-all.sh
+```
+
+## Troubleshooting
+
+**`no core at local-env/...`** Build one first, or use `serve-snapshot.sh`, which
+needs only the snapshot.
+
+**Heap exhausted while loading or dumping.** Raise `--dynamic-space-size`. Pass
+it through `scripts/sbcl-wrapped` rather than appending raw SBCL flags, and put it
+before any `--eval` (SBCL requires runtime options first).
+
+**`VERIFY-FAIL` during a load.** The load is corrupt. Call
+`(ichiran/memdict-compact:memdict-reset)` and load again in a fresh process;
+partial state from an earlier load in the same image does not clear itself.
+
+**The server's first line is not JSON.** That is the SBCL banner. Wait for
+`{"ready":true}` and ignore everything before it.
+
+**Very slow first request, then fast.** Expected. The gloss caches fill on first
+use. `scripts/warm-server.lisp` shows how to warm them at boot, which is what a
+baked core does for you.
+
+**One sentence romanizes differently from the database.** Re-run it. If it
+reproduces, please report it with the sentence and both outputs; see the caveat
+under [Verification](#verification).
 
 ## Documentation
 
-There is no documentation yet. Any API is considered unstable at this point.
+| Document | What is in it |
+| --- | --- |
+| [docs/WHY-FORK.md](docs/WHY-FORK.md) | What this fork is for, and what it deliberately does not touch |
+| [docs/RAM-DICTIONARY.md](docs/RAM-DICTIONARY.md) | The full guide: table gating, load order, memory per table, presets |
+| [docs/PERFORMANCE-HISTORY.md](docs/PERFORMANCE-HISTORY.md) | Every improvement, why it helped, how much, and what was rejected |
+| [docs/CODE-AUDIT.md](docs/CODE-AUDIT.md) | Where the code was restructured, and the verification behind it |
+| [docs/seams.md](docs/seams.md) | The interface contract between upstream code and the RAM layer |
+| [CHANGELOG.md](CHANGELOG.md) | Changes by release |
+| [worklogs/](worklogs/) | Development session notes, including the benchmarks |
 
-The basic functionality is `(ichiran:romanize "一覧は最高だぞ" :with-info t)`, but feel free to explore further.
+## Credits and license
 
-### This fork: in-RAM dictionary & zero-DB serving
+Ichiran is by Timofei Shatrov, MIT licensed, and this fork keeps that license.
+The in-RAM dictionary, the serving cores, the parallel server, and the
+verification gates were built by GolyBidoof with DeepSeek V4 Flash.
 
-Why a fork at all: [docs/WHY-FORK.md](docs/WHY-FORK.md).
-See [docs/RAM-DICTIONARY.md](docs/RAM-DICTIONARY.md) for the full guide:
-running hot dictionary lookups from RAM (all flags default OFF, so default
-behavior is unchanged), per-table memory/query tradeoffs, building `lite`
-and full serving cores, and the verification gates (`parity.sh`,
-`golden-diff.sh`, per-load `MEMDICT-VERIFY-OK` row counts).
-
-Reading from RAM is 11 to 15 times faster than reading through PostgreSQL, and
-a baked core starts in about a second and needs no database at all:
-
-| corpus | database | RAM snapshot | baked core |
-| --- | --- | --- | --- |
-| 382-line corpus | 20.15s | 1.52s | 1.50s |
-| 39-line paragraph | 2.23s | 0.20s | 0.21s |
-| 84-line paragraph | 6.09s | 0.55s | 0.50s |
-| time to first answer | 4.13-22.4s | 0.6-2.1s | 1.25s |
-
-```sh
-scripts/build-snapshot.sh                          # integer + sense layer
-PRESET=full-ram SYSTEM=1 scripts/build-image.sh    # bake a serving core
-scripts/warm.sh start                              # uses the core if present
-./scripts/bench-all.sh                             # reproduce the table
-```
-
-`worklogs/PERF-RESULTS.md` has the full numbers, the sizes (3717 MB database,
-1670 MB of snapshots, 466 MB core, 2786 MB live heap) and the before/after of
-every startup phase. The gates are unchanged and all green: `GOLDEN_DIFF_OK`,
-`RAM_PARITY_OK`, `PARITY_OK`.
+Dictionary data comes from [JMdictDB](http://edrdg.org/~smg/) and is subject to
+its own license. See [LICENSE](LICENSE).
