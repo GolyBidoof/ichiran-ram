@@ -65,7 +65,11 @@ if [ -n "$SYSTEM" ]; then
   # serve-parallel has to be loaded here: it defines *dict-baked*, and the core
   # sets it so the warm server knows not to re-read the dictionary it already
   # contains.
-  SYSTEM_TAIL='(load "src/memdict-compact-shims.lisp") (load "src/serve-parallel.lisp") (setf ichiran/dict::*memdict-p* t) (setf ichiran/serve-parallel::*dict-baked* t)'
+  # The gloss JSON caches have to be sized here, because this script loads the
+  # dictionary directly rather than through LOAD-DICTIONARY. Leaving it out
+  # produced a core that served uncached, which the runtime masked by
+  # initialising on first use but at the cost of first-request latency.
+  SYSTEM_TAIL='(load "src/memdict-compact-shims.lisp") (load "src/serve-parallel.lisp") (setf ichiran/dict::*memdict-p* t) (setf ichiran/serve-parallel::*dict-baked* t) (ichiran/dict::gloss-json-cache-init)'
 else
   SYSTEM_LISP='(format t "bare core (no analyzer baked in)~%")'
   SYSTEM_TAIL='(format t "no shims (bare core)~%")'

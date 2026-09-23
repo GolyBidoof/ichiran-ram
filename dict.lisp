@@ -2128,9 +2128,16 @@
         :conj-hits *gloss-conj-hits*
         :conj-misses *gloss-conj-misses*))
 
+(defun %ensure-gloss-json-cache ()
+  "The cache, allocating it if this image never called LOAD-DICTIONARY.
+   build-image.sh loads the dictionary itself, so a baked core starts with no
+   cache at all: without this, serving from a core silently ran uncached."
+  (or *gloss-json-cache*
+      (progn (gloss-json-cache-init) *gloss-json-cache*)))
+
 (defun %gloss-cache-slot (seq)
   "The slot cons for SEQ, or NIL when SEQ is not cacheable."
-  (let ((cache *gloss-json-cache*))
+  (let ((cache (%ensure-gloss-json-cache)))
     (and cache
          (integerp seq)
          (>= seq 0)
