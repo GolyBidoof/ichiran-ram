@@ -89,6 +89,31 @@
       (handler-case (ichiran:romanize text)
         (error (e) (format nil "ERROR: ~a" e)))))
 
+(defun load-dictionary (&key (int-snapshot "local-env/ichiran-int.snap")
+                             (sense-snapshot "local-env/ichiran-sense.snap"))
+  "Load the whole dictionary into this image, preferring snapshots to SQL.
+
+   The integer layer always comes from INT-SNAPSHOT. The sense layer comes from
+   SENSE-SNAPSHOT when it exists, which is what lets the RAM path run with no
+   database at all, and from PostgreSQL otherwise. Callers that have a baked
+   core should not call this: check *DICT-BAKED* first."
+  (ichiran/conn:with-db nil
+    (ichiran/memdict-compact:memdict-load-int :snapshot int-snapshot)
+    (if (probe-file sense-snapshot)
+        (progn
+          (format t "~&load-dictionary: sense layer from ~a (no database)~%" sense-snapshot)
+          (ichiran/memdict-compact:memdict-load-sense-snapshot sense-snapshot))
+        (progn
+          (format t "~&load-dictionary: sense layer from PostgreSQL~%")
+          (ichiran/memdict-compact:memdict-load
+           :chunk 200000 :tables '("sense" "gloss" "sense_prop"))))
+    (setf ichiran/dict::*memdict-p* t)
+    (warm-caches)
+    (setf *db-available* t))
+  (ichiran:romanize "テスト")
+  (sleep 2)
+  t)
+
 (defun warm-caches ()
   "Force the one-time cache initializations in the main thread, so workers
    only ever read them. Safe to call repeatedly."

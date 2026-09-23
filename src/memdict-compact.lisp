@@ -12,6 +12,7 @@
            ;; R5 full-dict exports
            #:compact-sense #:compact-gloss #:compact-sense-prop
            #:make-compact-sense #:make-compact-gloss #:make-compact-sense-prop
+           #:memdict-save-sense-snapshot #:memdict-load-sense-snapshot
            #:compact-sense-seq #:compact-sense-ord #:compact-sense-id
            #:compact-gloss-text #:compact-gloss-ord #:compact-sense-prop-tag
            #:compact-sense-prop-text #:compact-sense-prop-ord

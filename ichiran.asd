@@ -56,20 +56,6 @@
   :components ((:file "cli")))
 
 
-(defsystem #:ichiran/ram
-  :description "Ichiran fork: in-RAM dictionary and zero-DB serving cores"
-  :license "MIT"
-  :depends-on (#:ichiran #:postmodern)
-  :serial t
-  :components ((:file "src/trie")
-               (:file "src/memdict-compact")
-               (:file "src/memdict-int")
-               (:file "src/memdict-compact-shims")
-               ;; Thread-parallel serving. Loads last: it specialises on the
-               ;; analyzer's caches and calls ichiran:romanize.
-               (:file "src/serve-parallel")))
-
-
 #+sb-core-compression
 (defmethod asdf:perform ((o asdf:image-op) (c asdf:system))
   (uiop:dump-image (asdf:output-file o c) :executable t :compression t))
@@ -90,4 +76,7 @@
                (:file "src/memdict-int")
                (:file "src/memdict-compact-shims")
                (:file "src/int-snapshot")
+               ;; The sense layer as a snapshot, so the RAM path needs no
+               ;; database once the integer layer is snapshotted too.
+               (:file "src/sense-snapshot")
                (:file "src/serve-parallel")))

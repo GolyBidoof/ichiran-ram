@@ -58,7 +58,13 @@
     ("conjugation" :n :ids :seqs :froms :vias :major :major-from)
     ("conj_prop" :n :ids :conj-ids :types :type-ids :poss :pos-ids :flags :major)
     ("conj_source_reading" :n :ids :conj-ids :texts :text-offsets
-                           :srcs :src-offsets :text-ids :src-ids :major)))
+                           :srcs :src-offsets :text-ids :src-ids :major)
+    ;; The sense layer is stored by src/sense-snapshot.lisp, which flattens the
+    ;; compact hash tables to these columns.
+    ("sense" :n :ids :seqs :ords)
+    ("gloss" :n :ids :sense-ids :texts :text-offsets :text-ids :ords)
+    ("sense_prop" :n :ids :sense-ids :tags :tag-offsets :tag-ids
+                 :texts :text-offsets :text-ids :ords :seqs)))
 
 (defun text-table-name-p (name)
   (member name '("kana_text" "kanji_text") :test #'equal))

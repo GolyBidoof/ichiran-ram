@@ -13,17 +13,9 @@
       (progn
         (format t "~&warm-boot: dictionary is baked into this image, skipping loads~%")
         (ichiran/serve-parallel:warm-caches))
-      (ichiran/conn:with-db nil
-        (ichiran/memdict-compact:memdict-load-int
-         :snapshot (or (uiop:getenv "SNAPSHOT") "local-env/ichiran-int.snap"))
-        (ichiran/memdict-compact:memdict-load
-         :chunk 200000 :tables '("sense" "gloss" "sense_prop"))
-        (setf ichiran/dict::*memdict-p* t)
-        (ichiran/serve-parallel:warm-caches)
-        (setf ichiran/serve-parallel::*db-available* t)))
-  ;; force the suffix cache to completion so requests do not race its builder
-  (ichiran:romanize "テスト")
-  (sleep 2)
+      (ichiran/serve-parallel:load-dictionary
+       :int-snapshot (or (uiop:getenv "SNAPSHOT") "local-env/ichiran-int.snap")
+       :sense-snapshot (or (uiop:getenv "SENSE_SNAPSHOT") "local-env/ichiran-sense.snap")))
   t)
 
 (defun vn-lines ()

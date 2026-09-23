@@ -24,11 +24,14 @@
             (ichiran/memdict-compact:memdict-load-int :snapshot "local-env/ichiran-int.snap")
             (setf snap-t (- (now) s0)))
           (let ((s1 (now)))
-            (ichiran/memdict-compact:memdict-load :chunk 200000
-                                                  :tables '("sense" "gloss" "sense_prop"))
+            (if (probe-file "local-env/ichiran-sense.snap")
+                (ichiran/memdict-compact:memdict-load-sense-snapshot
+                 "local-env/ichiran-sense.snap")
+                (ichiran/memdict-compact:memdict-load
+                 :chunk 200000 :tables '("sense" "gloss" "sense_prop")))
             (setf sense-t (- (now) s1)))
           (setf ichiran/dict::*memdict-p* t))
-        (format t "~&SPLIT snapshot=~,2fs sense-layer-from-sql=~,2fs~%" snap-t sense-t)
+        (format t "~&SPLIT snapshot=~,2fs sense-layer=~,2fs~%" snap-t sense-t)
         (let ((dict-t (- (now) t1)))
           (let* ((cold (run-once work)) (best nil) (runs nil))
             (dotimes (i 3)
