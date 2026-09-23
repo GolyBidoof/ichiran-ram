@@ -62,8 +62,17 @@
 (defun pair-words-by-conj (&rest word-groups)
   (flet ((key (word)
            (sort (mapcar (lambda (conj-id)
-                           (let ((conj (get-dao 'conjugation conj-id)))
-                             (list (seq-from conj) (let ((via (seq-via conj))) (if (eql via :null) 0 via)))))
+                           (if (memdict-table-loaded-p "conjugation")
+                               ;; R9: read the conjugation row from RAM. It is
+                               ;; reached from suffix-rashii, and the database
+                               ;; fetch here is what still required a live
+                               ;; connection on the serving path.
+                               (multiple-value-bind (from via)
+                                   (memdict-call 'memdict-conj-from-via conj-id)
+                                 (list from (if (null via) 0 via)))
+                               (let ((conj (get-dao 'conjugation conj-id)))
+                                 (list (seq-from conj)
+                                       (let ((via (seq-via conj))) (if (eql via :null) 0 via))))))
                          (word-conjugations word))
                  (lex-compare '<))))
     (loop with bag = (make-hash-table :test 'equal)

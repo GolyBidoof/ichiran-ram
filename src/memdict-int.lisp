@@ -22,7 +22,7 @@
            #:int-text-row-fields #:int-text-find-rows-indexes #:int-text-index-by-id
            #:int-text-rows-by-seq-indexes #:int-text-find-by-seq-indexes
            #:int-load-entry #:int-entry-by-seq #:int-entry-row-count
-           #:int-load-conjugation #:int-conj-row-count
+           #:int-load-conjugation #:int-conj-row-count #:int-conj-by-id
            #:int-has-conj-p #:int-conj-rows-by-seq #:int-conj-seqs-by-from
            #:int-load-conj-prop #:int-conj-prop-row-count #:int-conj-props-by-id
            #:int-load-csr #:int-csr-row-count #:int-csr-by-id
@@ -653,6 +653,25 @@
                           (aref (getf table :froms) i)
                           (let ((v (aref (getf table :vias) i)))
                             (if (= v -1) nil v)))))))
+
+(defun int-conj-by-id (table conj-id)
+  "VALUES (FROM VIA-OR-NIL) for CONJ-ID, or NIL when absent. The loader reads
+   conjugation ORDER BY id, so the ids array is ascending and a binary search
+   answers this without building a 2.4M entry index just to serve the rare
+   suffix that needs it."
+  (let ((ids (getf table :ids))
+        (n (getf table :n)))
+    (loop with lo = 0 and hi = (1- n)
+          while (<= lo hi)
+          for mid = (ash (+ lo hi) -1)
+          for v = (aref ids mid)
+          do (cond ((= v conj-id)
+                    (return (values (aref (getf table :froms) mid)
+                                    (let ((via (aref (getf table :vias) mid)))
+                                      (if (= via -1) nil via)))))
+                   ((< v conj-id) (setf lo (1+ mid)))
+                   (t (setf hi (1- mid))))
+          finally (return nil))))
 
 (defun int-conj-seqs-by-from (table from)
   "List of conjugation SEQ values whose \"from\" is FROM, in id order."

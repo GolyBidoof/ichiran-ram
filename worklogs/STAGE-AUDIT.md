@@ -98,3 +98,53 @@ conjugation tables is what would make the claim true.
    real fix; it was shelved earlier and remains the largest algorithmic option.
 4. Startup is no longer worth much: 1.25s on a core, and the remaining pieces
    are under a second each.
+
+## Resolution: the 91% was a connection handshake
+
+The suggestion above assumed the JSON layer needed a rewrite. It did not. The
+measured cause was smaller and much worse.
+
+`word-info-gloss-json` wraps its body in `(with-connection *connection*)`, and
+`*connection*` is a spec list rather than an established connection, so
+POSTMODERN opens a brand new connection on every call. Measured directly:
+
+    (with-connection *connection* 42)    2146 to 2768 us, per call
+    even nested inside another one       3863 us
+
+A sentence carries about ten word-infos, so serving one line paid roughly ten
+connection handshakes. That is the 1.5 to 3 ms per word-info, the 40 to 50 ms
+per line, and the socket exhaustion under load. The dictionary was in RAM the
+whole time; the connection bought nothing.
+
+The fix is a `with-dict-connection` macro that skips the connection when every
+table the analyzer can reach is resident, applied to the three per-request
+wrappers (`dict-segment`, `word-info-from-text`, `word-info-gloss-json`). It
+keeps a fallback: if a path that is not ported yet still wants the database, it
+retries that body with a connection rather than changing behavior.
+
+| | before | after |
+| --- | --- | --- |
+| JSON for 382 golden lines | 19.03 s | 1.90 s |
+| per line | 49.9 ms | 5.0 ms |
+| with no database at all | did not run | 382 lines, 0 mismatches |
+
+Output is byte-identical in both cases, verified against a reference dump that
+was itself confirmed deterministic across runs (two dumps, same bytes).
+
+Porting the database out of the serving path also surfaced three more queries
+that no output-comparing gate could see, because each returned exactly what the
+database returns. All three are now served from RAM:
+
+- `dict-grammar.lisp`, the `:sa` unique-only predicate, which read `entry`
+  directly and was reached by ordinary input such as おかえりなさい;
+- `pair-words-by-conj`, reached from `suffix-rashii`, which fetched a
+  `conjugation` row per conj-id. It now binary searches the sorted `ids` array
+  in the resident conjugation table, so no 2.4M entry index is built for the
+  sake of one rare suffix;
+- `word-info-reading`, which ran a DAO fetch per word while the gloss JSON was
+  being built, and now uses the same RAM branch as `find-word-seq`.
+
+One path is honestly still not ported: `match-sense-restrictions` reads the
+`restricted-readings` view, which is derived rather than one of the resident
+tables, so it needs a data-level port. That is the only reason the fallback
+still fires, and it costs about 0.5 s over the corpus.

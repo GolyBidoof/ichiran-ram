@@ -1837,8 +1837,45 @@
                                           :skipped (- matches (length wi-list))
                                           ))))))
 
+(defun ram-dict-serves-p ()
+  "T when every table the analyzer can reach is resident in RAM, so a body that
+   would otherwise open a connection can run without one. Deliberately
+   conservative: a partial load keeps the previous behavior."
+  (and *memdict-p*
+       (every #'memdict-table-loaded-p
+              '("kana_text" "kanji_text" "entry" "conjugation" "conj_prop"
+                "sense" "gloss" "sense_prop"))))
+
+(defmacro with-dict-connection (&body body)
+  "WITH-CONNECTION, except it skips the connection entirely when RAM already
+   covers the dictionary.
+
+   POSTMODERN:WITH-CONNECTION given a spec opens a NEW connection on every
+   call: measured 2768us even with an ambient connection already bound, because
+   the spec is a cons rather than an established connection. WORD-INFO-GLOSS-JSON
+   wraps every single word in one and a sentence carries about ten words, which
+   made the connection handshake roughly 91% of serving time, and exhausted
+   sockets under load. The data was already in RAM; the connection bought
+   nothing."
+  `(if (ram-dict-serves-p)
+       (handler-case (progn ,@body)
+         (error (e)
+           ;; Some analyzer paths are not ported yet and still want the
+           ;; database: MATCH-SENSE-RESTRICTIONS reads the RESTRICTED-READINGS
+           ;; view, which is derived rather than one of the resident tables.
+           ;; Rather than change behavior, pay for a connection there. The
+           ;; retry works because the outer WITH-CONNECTION binds *database*
+           ;; for the whole body, so the inner wrappers may keep skipping.
+           ;; The body is pure (it builds a segmentation or a JSON tree), so
+           ;; running it twice is safe. Porting those paths removes the
+           ;; fallback; until then this keeps the speed and the output.
+           (if (search "No database connection" (princ-to-string e))
+               (with-connection *connection* ,@body)
+               (error e))))
+       (with-connection *connection* ,@body)))
+
 (defun word-info-from-text (text)
-  (with-connection *connection*
+  (with-dict-connection
     (let* ((readings (find-word-full text :counter :auto))
            (segments (loop for r in readings collect (gen-score (make-segment :start 0 :end (length text) :word r :text text))))
            (segment-list (make-segment-list :segments segments :start 0 :end (length text)
@@ -1901,14 +1938,21 @@
   wi-list)
 
 (defun word-info-reading (word-info)
-  (let ((table (case (word-info-type word-info) (:kanji 'kanji-text) (:kana 'kana-text)))
-        (true-text (word-info-true-text word-info)))
+  ;; R9: same RAM branch as FIND-WORD-SEQ. This runs per word while building
+  ;; the gloss JSON, and the DAO fetch here was what still demanded a live
+  ;; connection on the serving path once the earlier queries were ported.
+  (let* ((kana-p (eql (word-info-type word-info) :kana))
+         (table (if kana-p 'kana-text 'kanji-text))
+         (tname (if kana-p "kana_text" "kanji_text"))
+         (true-text (word-info-true-text word-info)))
     (when (and table true-text)
-      (car (select-dao table (:= 'text true-text))))))
+      (if (memdict-table-loaded-p tname)
+          (car (memdict-call 'memdict-text-rows-by-text tname true-text))
+          (car (select-dao table (:= 'text true-text)))))))
 
 (defun dict-segment (str &key (limit 5))
   (declare (optimize (speed 3) (safety 1) (debug 1)))
-  (with-connection *connection*
+  (with-dict-connection
     (loop for (path . score) in (find-best-path (join-substring-words str) (length str) :limit limit)
          collect (cons (fill-segment-path str path) score))))
 
@@ -2272,7 +2316,7 @@
             (inner word-info))))))
 
 (defun word-info-gloss-json (word-info &key root-only)
-  (with-connection *connection*
+  (with-dict-connection
     (labels ((inner (word-info &optional suffix)
                (let ((js (jsown:new-js ("reading" (reading-str word-info))
                                        ("text" (word-info-text word-info))

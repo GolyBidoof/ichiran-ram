@@ -18,6 +18,7 @@
            #:compact-sense-prop-text #:compact-sense-prop-ord
            #:memdict-senses-raw #:memdict-non-arch-posi #:memdict-uk
            #:memdict-entry-by-seq #:memdict-conj-data #:memdict-has-conj-p
+           #:memdict-conj-from-via
            #:memdict-reset #:memdict-loaded-tables
            ;; R6 residual-query helpers (reading-str/short-sense/conj lists)
            #:memdict-text-by-seq #:memdict-find-by-seq-text
@@ -821,6 +822,14 @@
         (when first
           (let ((gs (memdict-glosses-by-sense (compact-sense-id first))))
             (when gs (join-strings "; " (mapcar 'cdr gs)))))))))
+
+(defun memdict-conj-from-via (conj-id)
+  "VALUES (FROM VIA) for CONJ-ID from the in-RAM conjugation table, or NIL.
+   VIA is NIL where the database stores NULL. Mirrors what the analyzer reads
+   out of (get-dao 'conjugation id), which it used to fetch per conj-id."
+  (let ((it (gethash "conjugation" *int-tables*)))
+    (when it
+      (funcall (int-fn 'int-conj-by-id) it conj-id))))
 
 (defun memdict-has-conj-p (seq)
   "T whether SEQ has any conjugation rows."
