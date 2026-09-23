@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- **Serving path now issues 0.28 queries per line** (was 17.12): every
+  remaining per-candidate query has a RAM mirror, and a RAM miss is trusted
+  when the table's row count matched the DB at load (`int-register-text-table`
+  records it in `*complete-tables*`). Corpus 2.52s -> 1.54s, 13.43x vs the DB
+  path, 4.24ms/line. New mirrors: `find-word-with-pos`, `get-dao` by primary
+  key in the conjugation parent walk, `conj_source_reading` by
+  `(conj_id, source_text)`, `find-word-seq`, `get-kana-form`,
+  `find-word-conj-of`, `get-kana-forms*` (backed by a new by-from index on the
+  integer conjugation table), the `calc-score` prefer-kana `ord 0` probe and
+  the `:desu` suffix probe.
+- **Thread-parallel serving** (`src/serve-parallel.lisp`, wired into
+  `scripts/serve-system.sh` as the default, `WORKERS=` to size, `SERIAL=1` to
+  disable): 5.57x on 8 workers (1.153s -> 0.207s), output byte-identical to
+  serial at every worker count. Each worker binds private copies of the three
+  memo tables written during serving (`*is-arch-cache*`, `*reading-cache*`,
+  `*memdict-fn-cache*`) and opens its own DB connection, since postmodern's
+  `*database*` is a global special and a shared connection would corrupt.
+- **Rows are built straight from the integer columns**: `int-text-row-fields`
+  returns the ten fields as multiple values and `decode-int-row-at` constructs
+  the struct directly, removing a plist per lookup from a hot path. 1.54s ->
+  1.28s, 14.50x vs the DB path, 3.50ms/line.
+- `adjoin-word` shims for compact rows: the DAO methods specialise on
+  `simple-text`, so building a suffix compound from a RAM row previously
+  signalled no-primary-method now that `find-word-with-pos` returns compact
+  structs.
+- Note: cl-ppcre in this tree has no scanner cache, so regexes really are
+  recompiled per call. Memoizing them was measured and does **not** help
+  (`simplify-ngrams`: scanner builds 3436 -> 3, run got slower); the cost is
+  matching, not compiling. GC is 0.2% of wall time despite 561MB consed per
+  corpus run, so allocation reduction is not a wall-clock lever here. See
+  worklogs/PERF-PLAN.md.
+
 - Integer-keyed dictionary layer (`src/memdict-int.lisp`) covers `kana_text`,
   `kanji_text`, `entry`, `conjugation`, `conj_prop` and
   `conj_source_reading` as typed columns plus interned pools: 7.2GB for all

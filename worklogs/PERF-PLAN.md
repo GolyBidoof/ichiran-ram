@@ -41,6 +41,55 @@ just does not matter at this scale.
    of wall time, so this is not a wall-clock problem on SBCL here. Worth doing
    only where it also removes work (see A3), not for its own sake.
 
+## Status (updated after implementation)
+
+| tier | state | result |
+|---|---|---|
+| 0 - finish RAM wiring | **done** | 17.12 -> **0.28 queries/line**; 2.52s -> **1.54s**, 13.43x vs DB |
+| 1 - parallel serving | **done** | **5.57x** at 8 workers (1.153s -> 0.207s), output byte-identical |
+| 2.1 - decode-free reads | **done** | 1.54s -> **1.28s**, 14.50x, 3.50ms/line |
+| 2.2 - FST candidates | not started | largest single remaining item |
+| 2.3 - lattice/beam pruning | not started | must be opt-in (changes output) |
+| 3 - mmap/shared memory | **blocked on this host** | see below |
+
+Tier 0 beat its own estimate (1.25x predicted, 1.64x measured) because the
+residual DB cost was higher than the 51.5us/query round trip suggested: the
+queries sat inside the conjugation parent walk and the splitter, so each one
+also carried deserialisation and per-row setup.
+
+Tier 1's 5.57x is the biggest single win and makes the serial-path work
+comparatively small. Note the two are multiplicative: 0.207s vs the original
+2.52s RAM baseline is 12.2x, and vs the 18.85s DB baseline ~91x.
+
+### Tier 3: why this machine cannot validate it
+
+The plan's Tier 3 asked for an mmap'd on-disk columnar store. Two findings
+change that:
+
+1. **The core-image mechanism already provides the main benefit where it
+   fits.** `save-lisp-and-die` produces a file SBCL mmaps at startup, and the
+   OS shares its read-only pages between processes. The baked system-lite core
+   cold-starts to first romanize in ~2.4s with no quickload and no DB, and
+   `src/serve-parallel.lisp` already shares one in-RAM dictionary across
+   worker threads with no per-worker copy. So "fast start" and "shared
+   memory" are largely achieved; a custom format would mainly help the case
+   the core cannot cover.
+2. **The full-RAM core cannot be built on this 16GB host.** Dumping the
+   8.1GB dictionary needs roughly 2x its size free to freeze and relocate the
+   heap, and `scripts/build-image.sh` already documents that the full 7.1GB
+   dict dump needs a 32GB+ host. The attempt here failed in
+   `save-lisp-and-die` for exactly that reason. So the 82s full-dictionary
+   load still happens per process on this machine, and that is the one thing
+   an on-disk format would genuinely fix.
+
+The remaining Tier 3 work is therefore: (a) verify a full-RAM core on a
+32GB+ host, which is a build-environment task, not a code task; and (b) only
+then decide whether an on-disk format is worth writing, since its unique
+benefit is loading the full dictionary on a host too small to bake it. The
+format would need offset-based string pools (Lisp strings cannot be mmapped
+in place) and would touch every accessor and shim, so it should not be
+started without a host that can measure it.
+
 ## Tier 0: finish the RAM wiring (measured target ~1.25x)
 
 Remove the last 17.1 queries/line. Ranked by query volume from the callback
