@@ -82,6 +82,9 @@
         do (incf n)
            (let ((res (handler-case (eval form)
                         (error (e) (format nil "ERROR: ~a" e)))))
-             (format t "~&WARM-RESULT ~a ~a~%" n res)
+             ;; BEGIN/END bracketing: a long value can arrive in several
+             ;; writes, and a reader must not treat a half-written line as the
+             ;; finished answer.
+             (format t "~&WARM-RESULT-BEGIN ~a~%~a~%WARM-RESULT-END ~a~%" n res n)
              (finish-output))))
 (format t "~&WARM-EOF~%")

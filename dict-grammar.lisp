@@ -691,8 +691,23 @@
            (loop for v in val collect (cons substr v)))
           (t (list (cons substr val))))))
 
-(defun get-suffix-map (str)
+(defun ensure-suffixes-ready ()
+  "Block until the suffix cache is FULLY built.
+   init-suffixes fills it in a background thread and returns immediately,
+   while get-suffix-map reads *suffix-cache* right away. Reading a partly
+   built cache changes suffix parsing and therefore the chosen segmentation:
+   the same corpus line came out as the してる compound on one run and as a
+   conjugation of する on another, so both the RAM and the database path were
+   nondeterministic. Waiting is free after the first call."
   (init-suffixes)
+  ;; Wait only when someone else is building; waiting while already holding the
+  ;; lock would deadlock, and the builder never calls this.
+  (unless (sb-thread:holding-mutex-p *init-suffixes-lock*)
+    (sb-thread:with-mutex (*init-suffixes-lock*) nil))
+  (init-suffixes-running-p))
+
+(defun get-suffix-map (str)
+  (ensure-suffixes-ready)
   (let ((result (make-hash-table)))
     (loop for start from 0 below (length str)
          do (loop for end from (1+ start) upto (length str)

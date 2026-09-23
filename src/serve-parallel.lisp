@@ -105,6 +105,9 @@
   ;; inherit a finished cache instead of each racing to build their own.
   (dolist (probe '("日本語" "たべる" "がっこう" "読みます"))
     (ignore-errors (ichiran:romanize probe)))
+  ;; Run the suffix cache to completion here so workers inherit a finished one
+  ;; instead of racing its builder.
+  (ignore-errors (ichiran/dict::ensure-suffixes-ready))
   t)
 
 (defun copy-memo-table (table)

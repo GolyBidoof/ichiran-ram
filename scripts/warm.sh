@@ -46,9 +46,11 @@ send() {
   want=$(( ${before:-0} + 1 ))
   printf '%s\n' "$1" > "$FIFO" || return 1
   for _ in $(seq 1 900); do
-    after=$(grep -ac "WARM-RESULT" "$OUT" 2>/dev/null | head -1)
-    if [ "$after" -ge "$want" ]; then
-      grep -a "^WARM-RESULT $want " "$OUT" | tail -1 | sed "s/^WARM-RESULT $want //"
+    if grep -aq "^WARM-RESULT-END $want$" "$OUT" 2>/dev/null; then
+      awk -v n="$want" '
+        $0 == "WARM-RESULT-BEGIN " n { inb=1; next }
+        $0 == "WARM-RESULT-END " n   { inb=0 }
+        inb' "$OUT"
       return 0
     fi
     sleep 0.2
