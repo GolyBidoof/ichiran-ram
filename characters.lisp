@@ -204,6 +204,16 @@
             (cons (car pair) (ppcre:create-scanner `(:greedy-repetition 1 nil (:regex ,@(cdr pair))))))
           *char-class-regex-mapping*))
 
+(defparameter *char-count-scanners*
+  (mapcar (lambda (pair) (cons (car pair) (ppcre:create-scanner (cadr pair))))
+          *char-class-regex-mapping*)
+  "CHAR-CLASS -> compiled unanchored scanner for COUNT-CHAR-CLASS and
+   COLLECT-CHAR-CLASS. Both used to hand cl-ppcre the raw pattern STRING from
+   *char-class-regex-mapping* on every call, and its own string cache does not
+   hold these patterns, so every call recompiled one. COUNT-CHAR-CLASS runs from
+   CALC-SCORE on the segmentation hot path, so this was the largest avoidable
+   cost left: 902,646 compilations over 2000 lines of the magazine corpus.")
+
 (defun test-word (word char-class)
   (declare (type char-class char-class))
   (let ((regex (cdr (assoc char-class *char-scanners*))))
@@ -212,13 +222,13 @@
 (defun count-char-class (word char-class)
   (declare (type char-class char-class))
   (let ((cnt 0)
-        (regex (cadr (assoc char-class *char-class-regex-mapping*))))
+        (regex (cdr (assoc char-class *char-count-scanners*))))
     (ppcre:do-matches (s e regex word cnt)
       (incf cnt))))
 
 (defun collect-char-class (word char-class)
   (declare (type char-class char-class))
-  (let ((regex (cadr (assoc char-class *char-class-regex-mapping*)))
+  (let ((regex (cdr (assoc char-class *char-count-scanners*)))
         result)
     (ppcre:do-matches-as-strings (s regex word (nreverse result))
       (push s result))))

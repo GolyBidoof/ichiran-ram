@@ -259,3 +259,84 @@ differences over 6000 lines with the index on and off.
 
 `scripts/ram-parity.sh` still reports RAM_PARITY_OK against the database
 baseline.
+
+## Three-backend benchmarks (db / ram / core)
+
+Harnesses: `scripts/bench-all.sh` (warm and cold wall time, best of three) and
+`scripts/bench-vn.lisp` / `scripts/bench-core.lisp`, all measuring `romanize`
+(segmentation, not JSON). The core is `PRESET=full-ram SYSTEM=1`, so the
+analyzer and dictionary are baked and nothing is loaded at startup. The
+database column is the upstream backend with PostgreSQL 16 running.
+
+Per line, small corpora (milliseconds):
+
+| corpus | lines | db | ram | core |
+|---|---|---|---|---|
+| golden-corpus | 382 | 51.74 | 1.27 | 1.27 |
+| vn-paragraphs | 39 | 53.87 | 1.51 | 1.54 |
+| vn-paragraphs2 | 84 | 67.83 | 1.66 | 1.91 |
+
+RAM and core are 35x to 41x the database rate. Whole-process wall time (SBCL
+startup plus dictionary load included): golden 88.5s / 9.0s / 3.3s, vn-paragraphs
+14.0s / 7.0s / 1.6s, vn-paragraphs2 29.4s / 7.1s / 2.0s. Time to the first answer
+is where the core shows most: 23.0s / 0.97s / 0.54s on golden, and the core is
+ready in a flat 1.27s because it loads nothing.
+
+The 350k magazine (18,939 lines, 335,008 characters) is out of range for the
+database at about 52 ms per line, which is roughly 16 minutes, so it was run on
+RAM and core only:
+
+| mode | serial | parallel, 10 workers |
+|---|---|---|
+| ram | 23.79s best of 3, 1.26 ms/line | 2.29s, 0.121 ms/line, 12.8x |
+| core | 27.25s best of 3, 1.44 ms/line | 2.31s, 0.122 ms/line, 10.9x |
+
+Serial RAM and core are indistinguishable here: single passes of the same
+workload came out 1.543 and 1.325 ms/line, so the run-to-run spread is about 15%
+and the best-of-three ordering is not meaningful. Parallel results are identical
+(0.121 against 0.122 ms/line, zero empty results in both), which is about 430x
+the database per-line rate. The core's real advantage is startup, not throughput.
+
+## Scanner compilation: the largest remaining cost (fixed)
+
+`COUNT-CHAR-CLASS`, called from `CALC-SCORE` on the segmentation hot path, passed
+the raw pattern string from `*char-class-regex-mapping*` to cl-ppcre on every
+call. cl-ppcre's own string cache does not hold these patterns, so every call
+recompiled one. Counting `ppcre:create-scanner` over the magazine corpus:
+1,491,524 calls for 3,000 lines, about 497 per line. A backtrace at call 301
+named the chain `COUNT-CHAR-CLASS` <- `CALC-SCORE` <- `GEN-SCORE` <-
+`JOIN-SUBSTRING-WORDS`, with the pattern `"[々ヶ〆一-龯]"`.
+
+`*char-count-scanners*` now compiles those classes once at load, exactly as the
+file already did for `*char-scanners*` and `*kanji-mask-scanner*`. Compilations
+drop to 6,000 for the same 3,000 lines, and a paired A/B toggling the table
+between strings and scanners gave 4461.4 -> 3928.9 ms best of four (11.9%) and
+4815.3 -> 4551.4 ms median (5.5%), with `json-diff-lines=0`.
+
+## Two reverted experiments
+
+Both were implemented, measured, and removed rather than shipped:
+
+- **Window pre-filter.** Skipping windows that cannot be dictionary texts (empty
+  first-character bucket, or longer than the longest text in either table) is
+  provably safe, measured by replicating the test in Python: it skips 721,226 of
+  4,429,093 windows, 16.28%. It reduces bytes consed by 0.05% (4850.4 -> 4846.5 MB
+  over 4,000 lines) and shows no time gain outside the noise, so the complexity
+  does not pay. Note also that trimming `*max-word-length*` from 50 to the true
+  longest text (37) removes only 4.6% of windows and is not even safe: the
+  number-plus-counter path admits windows longer than any dictionary text.
+- **`kanji-regex` scanner cache.** Built and measured, then reverted: the cache
+  never gains an entry, because `kanji-regex` is called zero times on the golden
+  corpus, the prologue and the magazine. The 1.49M compilations came from
+  `count-char-class` instead. A related candidate, `kanji-prefix`, builds a fresh
+  pattern string per call but the string is constant, so cl-ppcre caches it.
+
+## Non-allocating table dispatch (fixed)
+
+The six integer lookups in `src/memdict-compact.lisp` called
+`(string-downcase (symbol-name table))` on every call, roughly 250 times per
+line, to decide kana against kanji. `memdict-table-name` returns the name
+unfolded and the comparisons use `STRING-EQUAL`, which is the same test for these
+ASCII names and conses nothing. Measured by running the same 4,000-line workload
+in two processes, one per source revision: 4877.4 -> 4848.8 MB consed, 0.59%,
+reproducible to 0.03% within a revision. Small, but free and exactly equivalent.

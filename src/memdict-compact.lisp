@@ -506,16 +506,26 @@
   (make-compact-conj-prop :id id :conj-id conj-id :conj-type type
                           :pos pos :neg neg :fml fml))
 
+(defun memdict-table-name (table)
+  "TABLE's name as a string, for the kana/kanji dispatch in the lookups below.
+
+   STRING-DOWNCASE used to run here on every call, and it conses a fresh string.
+   The integer lookups are called roughly 250 times per line, so that was
+   millions of throwaway strings spent deciding which table was meant. Returning
+   the name unfolded and comparing it with STRING-EQUAL is the same test for
+   these ASCII names and allocates nothing. TABLE may be a symbol or a string."
+  (if (stringp table) table (symbol-name table)))
+
 (defun memdict-find (table text)
   "Rows for TEXT (fresh copies; the analyzer mutates readings). NIL if none."
-  (let ((name (string-downcase (symbol-name table))))
-    (cond ((or (string= name "kana-text") (string= name "kana_text"))
+  (let ((name (memdict-table-name table)))
+    (cond ((or (string-equal name "kana-text") (string-equal name "kana_text"))
            (or (let ((it (gethash "kana_text" *int-tables*)))
                  (when it
                    (mapcar (lambda (r) (decode-int-row-at t it r))
                            (funcall (int-fn 'int-text-find-rows-indexes) it text))))
                (memdict-copy-rows (gethash text *kana-by-text*))))
-          ((or (string= name "kanji-text") (string= name "kanji_text"))
+          ((or (string-equal name "kanji-text") (string-equal name "kanji_text"))
            (or (let ((it (gethash "kanji_text" *int-tables*)))
                  (when it
                    (mapcar (lambda (r) (decode-int-row-at nil it r))
@@ -525,14 +535,14 @@
 
 (defun memdict-find-by-seq (table seq)
   "Rows for SEQ (fresh copies; the analyzer mutates readings). NIL if none."
-  (let ((name (string-downcase (symbol-name table))))
-    (cond ((or (string= name "kana-text") (string= name "kana_text"))
+  (let ((name (memdict-table-name table)))
+    (cond ((or (string-equal name "kana-text") (string-equal name "kana_text"))
            (or (let ((it (gethash "kana_text" *int-tables*)))
                  (when it
                    (mapcar (lambda (r) (decode-int-row-at t it r))
                            (funcall (int-fn 'int-text-find-by-seq-indexes) it seq))))
                (memdict-copy-rows (gethash seq *kana-by-seq*))))
-          ((or (string= name "kanji-text") (string= name "kanji_text"))
+          ((or (string-equal name "kanji-text") (string-equal name "kanji_text"))
            (or (let ((it (gethash "kanji_text" *int-tables*)))
                  (when it
                    (mapcar (lambda (r) (decode-int-row-at nil it r))
@@ -705,15 +715,15 @@
   "First TEXT for SEQ with ORD in TABLE. TABLE is kana-text/kanji-text (symbol
    or string). Mirrors reading-str-seq and entry get-kana/get-text/get-kanji
    (seq + ord 0 probes). NIL when TABLE isn't loaded (caller uses the DB)."
-  (let ((name (string-downcase (symbol-name table))))
-    (cond ((and (or (string= name "kana-text") (string= name "kana_text"))
+  (let ((name (memdict-table-name table)))
+    (cond ((and (or (string-equal name "kana-text") (string-equal name "kana_text"))
                 (memdict-table-loaded-p "kana_text"))
            (or (let ((it (gethash "kana_text" *int-tables*)))
                  (when it (funcall (int-fn 'int-text-by-seq) it seq ord)))
                (loop for r in (gethash seq *kana-by-seq*)
                      when (= (compact-kana-ord r) ord)
                        do (return (compact-kana-text r)))))
-          ((and (or (string= name "kanji-text") (string= name "kanji_text"))
+          ((and (or (string-equal name "kanji-text") (string-equal name "kanji_text"))
                 (memdict-table-loaded-p "kanji_text"))
            (or (let ((it (gethash "kanji_text" *int-tables*)))
                  (when it (funcall (int-fn 'int-text-by-seq) it seq ord)))
@@ -730,8 +740,10 @@
    Looping memdict-find-by-seq-text per (text, seq) pair returns word-major
    groups instead, which is what reordered tied alternatives on 72 golden
    lines. Rows come back sorted by physical rank, mirroring the database."
-  (let* ((name (string-downcase (symbol-name table)))
-         (kana-p (and (search "kana" name) t))
+  (let* ((name (memdict-table-name table))
+         ;; SEARCH is case sensitive, so it needs CHAR-EQUAL here now that NAME
+         ;; is no longer downcased.
+         (kana-p (and (search "kana" name :test #'char-equal) t))
          (it (gethash (if kana-p "kana_text" "kanji_text") *int-tables*)))
     (when it
       (let ((ranks (funcall (int-fn 'int-text-table-ranks) it))
@@ -749,8 +761,8 @@
   "Rows for SEQ with TEXT in TABLE (ascending id = DB select-dao order).
    Fresh copies (analyzer mutates readings). Mirrors get-original-text's
    (:and seq text) probes. NIL when TABLE isn't loaded (caller uses the DB)."
-  (let ((name (string-downcase (symbol-name table))))
-    (cond ((and (or (string= name "kana-text") (string= name "kana_text"))
+  (let ((name (memdict-table-name table)))
+    (cond ((and (or (string-equal name "kana-text") (string-equal name "kana_text"))
                 (memdict-table-loaded-p "kana_text"))
            (or (let ((it (gethash "kana_text" *int-tables*)))
                  (when it
@@ -761,7 +773,7 @@
                (loop for r in (gethash seq *kana-by-seq*)
                      when (equal (compact-kana-text r) text)
                        collect (copy-compact-kana r))))
-          ((and (or (string= name "kanji-text") (string= name "kanji_text"))
+          ((and (or (string-equal name "kanji-text") (string-equal name "kanji_text"))
                 (memdict-table-loaded-p "kanji_text"))
            (or (let ((it (gethash "kanji_text" *int-tables*)))
                  (when it
@@ -777,8 +789,8 @@
   "All rows for SEQ in TABLE ordered by ord (ascending id ties).
    Fresh copies (analyzer mutates readings). Mirrors get-kanji-kana-old's
    (select-dao ... 'ord). NIL when unloaded."
-  (let ((name (string-downcase (symbol-name table))))
-    (cond ((and (or (string= name "kana-text") (string= name "kana_text"))
+  (let ((name (memdict-table-name table)))
+    (cond ((and (or (string-equal name "kana-text") (string-equal name "kana_text"))
                 (memdict-table-loaded-p "kana_text"))
            (or (let ((it (gethash "kana_text" *int-tables*)))
                  (when it
@@ -786,7 +798,7 @@
                            (funcall (int-fn 'int-text-rows-by-seq-indexes) it seq))))
                (stable-sort (memdict-copy-rows (gethash seq *kana-by-seq*))
                             '< :key 'compact-kana-ord)))
-          ((and (or (string= name "kanji-text") (string= name "kanji_text"))
+          ((and (or (string-equal name "kanji-text") (string-equal name "kanji_text"))
                 (memdict-table-loaded-p "kanji_text"))
            (or (let ((it (gethash "kanji_text" *int-tables*)))
                  (when it
