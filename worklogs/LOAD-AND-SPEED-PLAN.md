@@ -69,6 +69,62 @@ rebuild. Ranked options:
    `(buffer . offset)` references) and the hash indexes (see option 2). Worth
    doing only after 2, since 2 removes much of the reason for the indexes.
 
+## Worker count on this machine (measured)
+
+140 the visual novel dialogue lines, best of two runs per setting, 10P+4E cores:
+
+| workers | wall | speedup | per line |
+|---|---|---|---|
+| 1 (serial) | 1.939s | 1.00x | 13.85ms |
+| 2 | 0.926s | 2.09x | 6.62ms |
+| 4 | 0.422s | 4.59x | 3.02ms |
+| 6 | 0.305s | 6.35x | 2.18ms |
+| 8 | 0.255s | 7.59x | 1.82ms |
+| **10** | **0.248s** | **7.82x** | **1.77ms** |
+| 11 | 0.280s | 6.93x | 2.00ms |
+| 13 | 0.292s | 6.63x | 2.09ms |
+| 14 | 0.343s | 5.66x | 2.45ms |
+| 20 | 0.299s | 6.49x | 2.14ms |
+
+So yes, more workers help — **up to the performance-core count, then they
+hurt**. Past 10 the extra work lands on the four efficiency cores and the
+batch cannot finish until its slowest member does, so throughput falls. The
+old default (`cpu-count - 1` = 13) was 15% slower than the optimum; the
+default is now the P-core count.
+
+Two things cap the curve at ~78% efficiency even at 10: SBCL's GC is
+stop-the-world, so worker allocations serialize at collection time, and an
+8GB structure with data-dependent access is memory-latency bound rather than
+throughput bound. Both are addressable (bigger young generation / fewer
+collections, and the index work below), but neither is a worker-count problem.
+
+### Accommodation: GPUs, NPUs and other accelerators
+
+Not worth pursuing here, and the reasoning is structural rather than a matter
+of effort:
+
+- **The hot path is branchy pointer-chasing, not dense arithmetic.** Romanize
+  enumerates substrings, does hash lookups into an 8GB dictionary, builds
+  candidate structs, then searches a lattice. GPUs need thousands of
+  independent, uniform, branch-free operations; this is the opposite.
+- **Random access into 8GB is latency-bound.** GPUs have enormous bandwidth
+  and poor dependent-load latency, and the working set does not fit in
+  cache. Offloading would trade fast CPU cache hits for slow global-memory
+  round trips.
+- **Per-sentence work is only ~11ms** and the parallelism is already
+  saturated at the sentence level (7.8x on 10 cores). A kernel launch plus
+  synchronization costs ~0.1-1ms, and the kernel itself would be dominated by
+  divergence, because candidate lattices are ragged and data-dependent.
+- **NPU/ANE is not applicable at all.** Apple's Neural Engine runs fixed
+  neural-network operations through Core ML; there is no general-purpose
+  path, and this romanizer has no neural component.
+- **CUDA is moot on this hardware**, and would not change the fit analysis.
+
+Where hardware could still help, if anything: **CPU SIMD (NEON/AVX)** for the
+matching inner loops specifically (comparing many candidate substrings at
+once, or a bitset FST), and more performance cores. Both are modest next to
+the algorithmic work below.
+
 ## Throughput: the analyzer core, not I/O
 
 Post-Tier-0 profile of the serial path (`sb-sprof`), now that the DB is gone:
