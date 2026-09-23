@@ -150,6 +150,45 @@ Ranked:
    the sampling profile over-reports this and the A/B is authoritative.
 4. **More workers.** 13 cores are available and the measurement used 8.
 
+## What the parallel ceiling actually is (measured, not profiled)
+
+Parallel efficiency tops out at ~78% (10 workers, 7.82x). The obvious suspect
+was SBCL's stop-the-world GC serializing the workers. It is not: measured
+over the 140-line the visual novel workload, GC is **1.6-3.0% of wall** in parallel and
+0.2% serial, while **860MB is consed per run — 6.1MB of garbage per line**.
+Allocation at that rate is a memory-bandwidth cost, and an 8GB structure with
+data-dependent access is latency bound, so the ceiling is the memory
+subsystem rather than collection pauses. The lever is therefore *cons less*,
+which is the analyzer-side work below.
+
+A note on methodology: `sb-sprof` flat reports on this macOS build are **not
+trustworthy** for attribution. It reported `foreign function write` at 31.9%
+of a workload that issues **zero** queries and writes nothing per line, and
+earlier it invented a `-[deoc_ultraInput featureValueForName:]` frame. Three
+separate conclusions here were reversed by measuring instead of profiling.
+Use sampling profiles to find *candidates*, and A/B runs to decide.
+
+### Allocation reduction: INTERSECTION predicates
+
+`intersection` was used in boolean contexts all over the scoring path
+(`kanji-break-penalty`, `calc-score`, and the segment filters), and builds a
+fresh result list on every candidate. Replaced with a `%any-in-common` macro
+that short-circuits on `member` with no allocation.
+
+Byte-identical on both gates (`PARITY_OK`, `GOLDEN_DIFF_OK`). Measured A/B in
+one process, 140 the visual novel lines, best of 3:
+
+| config | before | after | delta |
+|---|---|---|---|
+| serial | 1.601s | 1.585s | -1.0% |
+| 10 workers | 0.255s | 0.242s | -5.1% |
+| 14 workers | 0.242s | 0.240s | -0.8% |
+
+So a real but modest win, borderline noise on the serial path. Kept because
+it removes allocation on the path that the bandwidth analysis above says is
+the limiter, and because a predicate is the honest construct for a boolean
+test — but it is not a headline number.
+
 ## The one thing that would change everything
 
 A 32GB+ host would let `save-lisp-and-die` bake the whole 8.1GB dictionary,

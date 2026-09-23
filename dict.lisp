@@ -3,6 +3,18 @@
 
 (in-package #:ichiran/dict)
 
+(defmacro %any-in-common (a b &optional (test 'eql))
+  "True when A and B share an element. INTERSECTION builds a fresh result
+   list on every call, and these predicates run once per candidate during
+   scoring, so that allocation is pure garbage. TEST is a quoted symbol, so
+   the expansion introduces no closure and no allocation."
+  `(let ((bs ,b))
+     (and bs
+          (dolist (x ,a nil)
+            ;; TEST is a symbol naming the predicate, so this expands to a
+            ;; direct function reference with no closure.
+            (when (member x bs :test #',test) (return t))))))
+
 (defvar *jmdict-path* #p"foobar")
 
 (defvar *jmdict-data* #p"foobar")
@@ -963,11 +975,11 @@
         (bonus 0) (ratio 2)
         (posi (and info (getf info :posi))))
     (when info
-      (cond ((or (intersection (getf info :seq-set) *no-kanji-break-penalty*)
+      (cond ((or (%any-in-common (getf info :seq-set) *no-kanji-break-penalty*)
                  ;; do not penalize second word of で/す break
                  (and (eql end :beg) (alexandria:starts-with #\す text)))
              (return-from kanji-break-penalty score))
-            ((intersection '("vs-s" "v5s") posi :test 'equal)
+            ((%any-in-common '("vs-s" "v5s") posi equal)
              ;; these words have する endings which might lead to bad splits
              (let ((suru-suffix (find :suru (get-suffixes text) :key 'second)))
                (when suru-suffix
@@ -978,8 +990,7 @@
                    (return-from kanji-break-penalty (min score (+ suffix-score 50)))))))
             ((and (eql end :beg) (member "num" posi :test 'equal))
              (incf bonus 5))
-            ((and (eql end :beg) (intersection
-                                  '("suf" "n-suf") posi :test 'equal))
+            ((and (eql end :beg) (%any-in-common '("suf" "n-suf") posi equal))
              (incf bonus 10))
             ((and (eql end :end) (member "pref" posi :test 'equal))
              (incf bonus 12))
@@ -1101,7 +1112,7 @@
          (semi-final-particle-p (member seq *semi-final-prt*))
          (non-final-particle-p (member seq *non-final-prt*))
          (pronoun-p (member "pn" posi :test 'equal))
-         (cop-da-p (intersection seq-set *copulae*))
+         (cop-da-p (%any-in-common seq-set *copulae*))
          (long-p (> len
                     (cond
                       ((and kanji-p (not prefer-kana)
@@ -1109,7 +1120,7 @@
                                 (and use-length (member 13 conj-types))))
                        2)
                       ((and common-p (< 0 (the fixnum common) 10)) 2)
-                      ((and (intersection '(3 9) conj-types) (not use-length)) 4)
+                      ((and (%any-in-common '(3 9) conj-types) (not use-length)) 4)
                       (t 3))))
          (no-common-bonus (or particle-p
                               (not conj-types-p)
@@ -1121,7 +1132,7 @@
              (type (integer 0 10000) len ord n-kanji)
              (type (or fixnum (eql :null)) common)
              (type string text))
-    (when (or (intersection seq-set *skip-words*)
+    (when (or (%any-in-common seq-set *skip-words*)
               (and (not final) (member seq *final-prt*))
               (and (not root-p) (skip-by-conj-data conj-data)))
       (return-from calc-score 0))
@@ -1989,7 +2000,7 @@
      for rinf = (when inf (join "; " inf))
      for field = (cdr (assoc "field" props :test 'equal))
      for rfield = (and field (format nil "{~{~a~^,~}}" field))
-     when (and (or (not pos-list) (intersection lpos pos-list :test 'equal))
+     when (and (or (not pos-list) (%any-in-common lpos pos-list equal))
                (or (not (or reading-getter reading))
                    (not (or (assoc "stagk" props :test 'equal)
                             (assoc "stagr" props :test 'equal)))

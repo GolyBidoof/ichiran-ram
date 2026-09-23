@@ -771,9 +771,9 @@
 (defun filter-is-noun (segment)
   (or (destructuring-bind (k p c l) (getf (segment-info segment) :kpcl)
         (and (or l k (and p c))
-             (intersection '("n" "n-adv" "n-t" "adj-na" "n-suf" "pn")
+             (%any-in-common '("n" "n-adv" "n-t" "adj-na" "n-suf" "pn")
                            (getf (segment-info segment) :posi)
-                           :test 'equal)))
+                           equal)))
       (and (typep (segment-word segment) 'counter-text)
            (getf (segment-info segment) :seq-set))))
 
@@ -782,14 +782,14 @@
      (destructuring-bind ,kpcl-vars (getf (segment-info ,segment) :kpcl)
        (declare (ignorable ,@kpcl-vars))
        (and (progn ,@kpcl-test)
-            (intersection ',pos-list
+            (%any-in-common ',pos-list
                           (getf (segment-info ,segment) :posi)
-                          :test 'equal)))))
+                          equal   )))))
 
 (declaim (inline filter-in-seq-set))
 (defun filter-in-seq-set (&rest seqs)
   (lambda (segment)
-    (intersection seqs (getf (segment-info segment) :seq-set))))
+    (%any-in-common seqs (getf (segment-info segment) :seq-set))))
 
 (declaim (inline filter-in-seq-set-simple))
 (defun filter-in-seq-set-simple (&rest seqs)
@@ -797,7 +797,7 @@
   (lambda (segment)
     (let ((seq (seq (segment-word segment))))
       (and (not (listp seq))
-           (intersection seqs (getf (segment-info segment) :seq-set))))))
+           (%any-in-common seqs (getf (segment-info segment) :seq-set))))))
 
 (declaim (inline filter-is-conjugation))
 (defun filter-is-conjugation (conj-type)
