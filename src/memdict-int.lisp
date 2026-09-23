@@ -175,19 +175,25 @@
                ;; order visible in the output: 72 of 364 golden lines differed
                ;; purely because the tie-break here was id rather than
                ;; physical position.
-               (ranks (let* ((heap-ids (query (format nil "SELECT id FROM ~a ORDER BY ctid"
-                                                      table)
-                                              :column))
-                             (rank-of-id (make-array (1+ (reduce #'max heap-ids))
-                                                     :element-type '(unsigned-byte 32)
-                                                     :initial-element 0)))
-                        (loop for id in heap-ids for r from 0
-                              do (setf (aref rank-of-id id) r))
-                        (let ((out (make-array n :element-type '(unsigned-byte 32))))
-                          (loop for i from 0 below n
-                                do (setf (aref out i)
-                                         (aref rank-of-id (aref ids i))))
-                          out))))
+               ;; Inside WITH-CONNECTION: this binding is evaluated before the
+               ;; loader's body, so a bare QUERY here failed with "No database
+               ;; connection selected" whenever memdict-load-int was called
+               ;; with an explicit :conn instead of a global connection (which
+               ;; is how build-image.sh calls it).
+               (ranks (postmodern:with-connection conn
+                        (let* ((heap-ids (query (format nil "SELECT id FROM ~a ORDER BY ctid"
+                                                        table)
+                                                :column))
+                               (rank-of-id (make-array (1+ (reduce #'max heap-ids))
+                                                       :element-type '(unsigned-byte 32)
+                                                       :initial-element 0)))
+                          (loop for id in heap-ids for r from 0
+                                do (setf (aref rank-of-id id) r))
+                          (let ((out (make-array n :element-type '(unsigned-byte 32))))
+                            (loop for i from 0 below n
+                                  do (setf (aref out i)
+                                           (aref rank-of-id (aref ids i))))
+                            out)))))
           ;; Text-major order: sort row indices by (text-idx, physical rank).
           ;; Key packs into one fixnum (text-idx < 2^22, rank < 2^32).
           (let ((order (make-array n :element-type 'fixnum)))

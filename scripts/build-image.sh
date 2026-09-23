@@ -85,7 +85,7 @@ $SYSTEM_LISP
 (load "src/trie.lisp")
 (in-package :cl-user)
 (format t "~%== building serving core: loading integer dict layer (bare)...~%")
-(when (plusp (length '$INT_TABLES))
+(when (plusp (length (list $INT_TABLES)))
   (multiple-value-bind (bytes sizes)
       (ichiran/memdict-compact:memdict-load-int
        :conn '("$DB_NAME" "$DB_USER" "$DB_PASS" "$DB_HOST")
@@ -111,10 +111,22 @@ echo "== build-image.sh: building bare serving core (no :ichiran), tables: $TABL
 # save-lisp-and-die needs ~2x dict size free to freeze+relocate the heap, so
 # request the max heap this Mac allows (16GB). Kana-only (3GB dict) builds
 # fine here; the full 7.1GB dict dump needs a 32GB+ host.
+# Keep the whole log. Piping straight to tail hid the actual error on a failed
+# build, which is exactly when the message matters.
+mkdir -p local-env/scratch
+BUILD_LOG="local-env/scratch/build-image.log"
+set +e
 scripts/sbcl-wrapped --dynamic-space-size 16384 --non-interactive \
   --load "$BUILD_LISP" \
   --eval '(sb-ext:save-lisp-and-die "'"$OUT"'" :executable nil :compression t)' \
-  2>&1 | tail -5
+  > "$BUILD_LOG" 2>&1
+BUILD_RC=$?
+set -e
+tail -5 "$BUILD_LOG"
+if [ "$BUILD_RC" -ne 0 ]; then
+  echo "IMAGE_BUILD_FAILED rc=$BUILD_RC (full log: $BUILD_LOG)"
+  exit "$BUILD_RC"
+fi
 echo "IMAGE_BUILD_DONE -> $OUT"
 # Provenance: record exactly what went into this core so 64GB-host and
 # local builds are distinguishable.
