@@ -483,7 +483,7 @@
 
 ;;;;
 
-(defprepared query-parents-kanji
+(defprepared query-parents-kanji-db
     (:select 'kt.id 'conj.id
              :from (:as 'kanji-text 'kt)
              (:as 'conj-source-reading 'csr)
@@ -496,7 +496,7 @@
                                    (:else 'conj.from)))
                      (:= 'kt.text 'csr.source-text))))
 
-(defprepared query-parents-kana
+(defprepared query-parents-kana-db
     (:select 'kt.id 'conj.id
              :from (:as 'kana-text 'kt)
              (:as 'conj-source-reading 'csr)
@@ -508,6 +508,19 @@
                      (:= 'kt.seq (:case ((:not-null 'conj.via) 'conj.via)
                                    (:else 'conj.from)))
                      (:= 'kt.text 'csr.source-text))))
+
+;; R7: serve the conjugation parent lookup from the integer tables when the
+;; whole conjugation trio is loaded (trust the RAM result, including NIL), so
+;; best-kana-conj / best-kanji-conj resolve conjugated readings without the DB.
+(defun query-parents-kanji (seq text)
+  (if (memdict-table-loaded-p "conjugation" "conj_prop" "conj_source_reading")
+      (memdict-call 'memdict-query-parents "kanji_text" seq text)
+      (query-parents-kanji-db seq text)))
+
+(defun query-parents-kana (seq text)
+  (if (memdict-table-loaded-p "conjugation" "conj_prop" "conj_source_reading")
+      (memdict-call 'memdict-query-parents "kana_text" seq text)
+      (query-parents-kana-db seq text)))
 
 (defun best-kana-conj (obj &aux (wc (word-conjugations obj)))
   (cond ((and (or (not wc) (eql wc :root))

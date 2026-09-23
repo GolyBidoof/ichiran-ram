@@ -31,7 +31,8 @@
            #:compact-conj-id #:compact-conj-seq #:compact-conj-from #:compact-conj-via
            #:compact-sense-prop-id #:compact-sense-prop-sense-id #:compact-sense-prop-seq
            ;; R7 integer backend registry
-           #:int-register-text-table #:int-table-loaded-p #:*int-tables*))
+           #:int-register-text-table #:int-table-loaded-p #:*int-tables*
+           #:memdict-query-parents))
 
 (in-package #:ichiran/memdict-compact)
 
@@ -397,6 +398,22 @@
                           :nokanji (getf plist :nokanji)
                           :best-kana (or (getf plist :best-kana) :null))))
 
+(defun int-conj-tables-present-p ()
+  "T when all three conjugation int tables are registered."
+  (and (gethash "conjugation" *int-tables*)
+       (gethash "conj_prop" *int-tables*)
+       (gethash "conj_source_reading" *int-tables*)))
+
+(defun int->compact-conj (id seq from via-or-nil)
+  "Build a compact-conj from int fields (nil via becomes :null, mirroring
+   the DB-loader shape that select-conjs tests with eql :null)."
+  (make-compact-conj :id id :seq seq :from from
+                     :via (or via-or-nil :null)))
+
+(defun int->compact-conj-prop (id conj-id type pos neg fml)
+  (make-compact-conj-prop :id id :conj-id conj-id :conj-type type
+                          :pos pos :neg neg :fml fml))
+
 (defun memdict-find (table text)
   "Rows for TEXT (fresh copies; the analyzer mutates readings). NIL if none."
   (let ((name (string-downcase (symbol-name table))))
@@ -443,8 +460,19 @@
 ;;; behavior.
 
 (defun memdict-entry-by-seq (seq)
-  "Return the compact-entry for SEQ, or NIL."
-  (gethash seq *entry-by-seq*))
+  "Return the compact-entry for SEQ, or NIL. Integer backend first when
+   the entry int table is registered (fresh struct per call)."
+  (or (let ((it (gethash "entry" *int-tables*)))
+        (when it
+          (let ((pl (funcall (int-fn 'int-entry-by-seq) it seq)))
+            (when pl
+              (make-compact-entry :seq (getf pl :seq)
+                                  :content (getf pl :content)
+                                  :root-p (getf pl :root-p)
+                                  :n-kanji (getf pl :n-kanji)
+                                  :n-kana (getf pl :n-kana)
+                                  :primary-nokanji (getf pl :primary-nokanji))))))
+      (gethash seq *entry-by-seq*)))
 
 (defun memdict-senses-by-seq (seq)
   "Return list of compact-sense for SEQ (ordered by ord)."
@@ -623,7 +651,11 @@
   "Mirror ichiran/dict::select-conjs: conjugation rows for SEQ; with
    CONJ-IDS filter by id (unless :root); without, prefer via-NULL rows.
    Id-ascending (DB select-dao order). Caller gates on the conjugation table."
-  (let ((rows (sort (copy-list (gethash seq *conj-by-seq*)) '< :key 'compact-conj-id)))
+  (let ((rows (if (gethash "conjugation" *int-tables*)
+                  (loop for (id sq from via) in (funcall (int-fn 'int-conj-rows-by-seq)
+                                                         (gethash "conjugation" *int-tables*) seq)
+                        collect (int->compact-conj id sq from via))
+                  (sort (copy-list (gethash seq *conj-by-seq*)) '< :key 'compact-conj-id))))
     (cond ((and conj-ids (not (eql conj-ids :root)))
            (loop for c in rows when (member (compact-conj-id c) conj-ids) collect c))
           (t (or (loop for c in rows when (eql (compact-conj-via c) :null) collect c)
@@ -632,7 +664,11 @@
 (defun memdict-conj-props (conj-id)
   "Copy of the conj_prop rows for CONJ-ID, id-ascending (DB select-dao order).
    Caller gates on the conj_prop table."
-  (sort (copy-list (gethash conj-id *conj-prop-by-id*)) '< :key 'compact-conj-prop-id))
+  (or (let ((it (gethash "conj_prop" *int-tables*)))
+        (when it
+          (loop for (id cid type pos neg fml) in (funcall (int-fn 'int-conj-props-by-id) it conj-id)
+                collect (int->compact-conj-prop id cid type pos neg fml))))
+      (sort (copy-list (gethash conj-id *conj-prop-by-id*)) '< :key 'compact-conj-prop-id)))
 
 (defun memdict-short-sense-str (seq &key with-pos)
   "Mirror ichiran/dict::short-sense-str: gloss string of the first sense by
@@ -656,7 +692,9 @@
 
 (defun memdict-has-conj-p (seq)
   "T whether SEQ has any conjugation rows."
-  (not (null (gethash seq *conj-by-seq*))))
+  (or (let ((it (gethash "conjugation" *int-tables*)))
+        (when it (funcall (int-fn 'int-has-conj-p) it seq)))
+      (not (null (gethash seq *conj-by-seq*)))))
 
 ;;; ---- R6: counter helpers (pure scalars; no DAO shapes) ----
 ;;; get-counter-ids / get-counter-stags fire per-process (cached by `ensure`)
@@ -750,7 +788,22 @@
    - props   : list of compact-conj-prop
    Mirrors the raw pieces ichiran/dict::get-conj-data's DB path reads.
    Conj rows sorted by id (DB select-dao order); src-map in csr-id order."
-  (let ((conjs (sort (copy-list
+  (if (int-conj-tables-present-p)
+      (let ((conj-tab (gethash "conjugation" *int-tables*))
+            (prop-tab (gethash "conj_prop" *int-tables*))
+            (csr-tab (gethash "conj_source_reading" *int-tables*)))
+        (loop for (id sq from via)
+              in (funcall (int-fn 'int-conj-rows-by-seq) conj-tab seq)
+              for cid = id
+              when (cond ((null from/conj-ids) t)
+                         ((listp from/conj-ids) (member cid from/conj-ids))
+                         (t (= from from/conj-ids)))
+                collect (list (int->compact-conj id sq from via)
+                              (funcall (int-fn 'int-csr-by-id) csr-tab cid)
+                              (loop for (pid pcid type pos neg fml)
+                                    in (funcall (int-fn 'int-conj-props-by-id) prop-tab cid)
+                                    collect (int->compact-conj-prop pid pcid type pos neg fml)))))
+      (let ((conjs (sort (copy-list
                       (cond ((null from/conj-ids)
                              (gethash seq *conj-by-seq*))
                             ((listp from/conj-ids)
@@ -768,4 +821,36 @@
                               collect (list (compact-csr-text r)
                                             (compact-csr-source-text r)))
                         (sort (copy-list (gethash (compact-conj-id conj) *conj-prop-by-id*))
-                              '< :key 'compact-conj-prop-id)))))
+                              '< :key 'compact-conj-prop-id))))))
+
+;;; ---- R7: conjugation parent lookup (mirror of query-parents-kanji/kana) ----
+;;; best-kana-conj / best-kanji-conj resolve a conjugated form's reading by
+;;; walking to the *parent* dictionary entry. The DB queries join
+;;; kanji_text/kana_text with conj_source_reading and conjugation; these
+;;; mirrors reproduce the same (parent-text-id conj-id) pairs from RAM so the
+;;; analyzer's conjugation-aware reading path works off the integer tables.
+
+(defun memdict-query-parents (text-table seq text)
+  "RAM mirror of ichiran/dict::query-parents-kanji / query-parents-kana:
+   list of (parent-text-id conj-id) such that a conjugation of SEQ maps TEXT
+   (the conjugated form) through conj_source_reading to a source reading that
+   exists in TEXT-TABLE. TEXT-TABLE is \"kanji_text\" or \"kana_text\".
+   NIL when the conjugation trio or that text table isn't loaded.
+   Order: conj rows by id, csr rows by id, text rows by id (deterministic)."
+  (let ((conj-tab (gethash "conjugation" *int-tables*))
+        (csr-tab (gethash "conj_source_reading" *int-tables*))
+        (txt-tab (gethash text-table *int-tables*)))
+    (when (and conj-tab csr-tab txt-tab (gethash "conj_prop" *int-tables*))
+      (let ((found nil))
+        (dolist (cr (funcall (int-fn 'int-conj-rows-by-seq) conj-tab seq))
+          (destructuring-bind (cid cseq from via) cr
+            (declare (ignore cseq))
+            ;; DB joins kt.seq to conj.via when non-NULL, else conj.from.
+            (let ((target (or via from)))
+              (dolist (sr (funcall (int-fn 'int-csr-by-id) csr-tab cid))
+                (destructuring-bind (ctext csrc) sr
+                  (when (equal ctext text)
+                    (dolist (row (funcall (int-fn 'int-text-find-by-seq) txt-tab target))
+                      (when (equal (getf row :text) csrc)
+                        (push (list (getf row :id) cid) found)))))))))
+        (nreverse found)))))

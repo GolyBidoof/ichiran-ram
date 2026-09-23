@@ -19,6 +19,11 @@
            #:int-text-row-count #:int-text-table-p
            #:int-text-row #:int-text-find-rows #:int-text-rows-by-seq
            #:int-text-find-by-seq
+           #:int-load-entry #:int-entry-by-seq #:int-entry-row-count
+           #:int-load-conjugation #:int-conj-row-count
+           #:int-has-conj-p #:int-conj-rows-by-seq
+           #:int-load-conj-prop #:int-conj-prop-row-count #:int-conj-props-by-id
+           #:int-load-csr #:int-csr-row-count #:int-csr-by-id
            #:make-int-text-table))
 
 (in-package #:ichiran/memdict-int)
@@ -259,6 +264,89 @@
             do (push (int-text-row table row) out))
       (sort out '< :key (lambda (r) (getf r :id))))))
 
+;;; ---- entry table (keyed by seq, unique: dense direct index) ----
+
+(defun int-load-entry (&key (chunk 200000) conn)
+  "Load entry into columns + dense seq direct index. ORDER BY seq."
+  (sb-ext:gc :full t)
+  (let ((before (sb-kernel:dynamic-usage)))
+    (let ((conn (or conn (default-conn)))
+          (seqs (make-array 2600000 :element-type '(unsigned-byte 32)
+                            :fill-pointer 0 :adjustable t))
+          (content-ids (make-array 2600000 :element-type '(unsigned-byte 32)
+                                   :fill-pointer 0 :adjustable t))
+          (flags (make-array 2600000 :element-type '(unsigned-byte 8)
+                             :fill-pointer 0 :adjustable t))
+          (nkanji (make-array 2600000 :element-type '(unsigned-byte 32)
+                              :fill-pointer 0 :adjustable t))
+          (nkana (make-array 2600000 :element-type '(unsigned-byte 32)
+                             :fill-pointer 0 :adjustable t))
+          (contents (make-array 1024 :fill-pointer 0 :adjustable t))
+          (content-index (make-hash-table :test 'equal))
+          (max-seq 0))
+      (labels ((pool (s)
+                 (or (gethash s content-index)
+                     (let ((i (fill-pointer contents)))
+                       (vector-push-extend s contents)
+                       (setf (gethash s content-index) i)
+                       i))))
+        (postmodern:with-connection conn
+          (loop with offset = 0
+                for rows = (postmodern:query
+                            (format nil "SELECT seq, content, root_p, n_kanji, n_kana, primary_nokanji FROM entry ORDER BY seq LIMIT ~a OFFSET ~a"
+                                    chunk offset)
+                            :lists)
+                while rows
+                do (dolist (pl rows)
+                     (destructuring-bind (seq content root-p n-kanji n-kana primary-nokanji) pl
+                       (vector-push-extend seq seqs)
+                       (vector-push-extend (pool content) content-ids)
+                       (vector-push-extend (logior (if root-p 1 0)
+                                                   (if primary-nokanji 2 0))
+                                           flags)
+                       (vector-push-extend n-kanji nkanji)
+                       (vector-push-extend n-kana nkana)
+                       (when (> seq max-seq) (setf max-seq seq))))
+                   (incf offset chunk))))
+        (let* ((n (fill-pointer seqs))
+               (freeze (lambda (v et) (let ((out (make-array n :element-type et)))
+                                        (replace out v))))
+               (seq-vec (funcall freeze seqs '(unsigned-byte 32)))
+               (direct (make-array (1+ max-seq) :element-type '(signed-byte 32)
+                                   :initial-element -1)))
+          (loop for i from 0 below n
+                do (setf (aref direct (aref seq-vec i)) i))
+          (sb-ext:gc :full t)
+          (let ((after (sb-kernel:dynamic-usage)))
+            (values (list :n n
+                          :seqs seq-vec
+                          :contents (let ((out (make-array (fill-pointer contents))))
+                                      (replace out contents))
+                          :content-ids (funcall freeze content-ids '(unsigned-byte 32))
+                          :flags (funcall freeze flags '(unsigned-byte 8))
+                          :nkanji (funcall freeze nkanji '(unsigned-byte 32))
+                          :nkana (funcall freeze nkana '(unsigned-byte 32))
+                          :direct direct
+                          :max-seq max-seq)
+                     (- after before)))))))
+
+(defun int-entry-row-count (table)
+  (getf table :n))
+
+(defun int-entry-by-seq (table seq)
+  "Plist (:seq :content :root-p :n-kanji :n-kana :primary-nokanji) or NIL."
+  (when (<= seq (getf table :max-seq))
+    (let ((i (aref (getf table :direct) seq)))
+      (when (>= i 0)
+        (let ((fl (aref (getf table :flags) i)))
+          (list :seq seq
+                :content (aref (getf table :contents)
+                               (aref (getf table :content-ids) i))
+                :root-p (plusp (logand fl 1))
+                :n-kanji (aref (getf table :nkanji) i)
+                :n-kana (aref (getf table :nkana) i)
+                :primary-nokanji (plusp (logand fl 2))))))))
+
 (defun int-text-find (table text)
   "List of (id seq ord) for TEXT in id order (mirror of memdict-find shape
    for verification; serving returns richer rows later)."
@@ -271,3 +359,241 @@
               collect (list (aref (int-text-table-ids table) row)
                             (aref (int-text-table-seqs table) row)
                             (aref (int-text-table-ords table) row)))))))
+;;; ---- conjugation trio (compact integer columns + range indexes) ----
+
+;;; ---- shared range-index helpers (flat style: minimal nesting) ----
+
+(defun int-sort-positions (n key-fn)
+  "Vector MAJOR where MAJOR[pos] = row index, rows sorted by KEY-FN ascending.
+   KEY-FN must return fixnums."
+  (let ((order (make-array n :element-type 'fixnum)))
+    (loop for i from 0 below n do (setf (aref order i) i))
+    (sort order '< :key key-fn)))
+
+(defun int-group-ranges (major n group-fn)
+  "Hash GROUP -> (start . count) over MAJOR positions using GROUP-FN on rows.
+   Assumes MAJOR is sorted by group (ties broken stably enough for ranges)."
+  (let ((ht (make-hash-table :test 'eql)))
+    (loop for pos from 0 below n
+          for row = (aref major pos)
+          for g = (funcall group-fn row)
+          for cell = (gethash g ht)
+          do (if cell
+                 (incf (cdr cell))
+                 (setf (gethash g ht) (cons pos 1))))
+    ht))
+
+(defun int-u32-col (fill-vec n)
+  "Freeze adjustable FILL-VEC (active elements) to (unsigned-byte 32) vector."
+  (let ((out (make-array n :element-type '(unsigned-byte 32))))
+    (replace out fill-vec)))
+
+(defun int-load-conjugation (&key (chunk 200000) conn)
+  "Load conjugation (id seq from via). via :null becomes -1. ORDER BY id."
+  (sb-ext:gc :full t)
+  (let ((before (sb-kernel:dynamic-usage)))
+    (let ((conn (or conn (default-conn)))
+          (ids (make-array 2400000 :element-type '(unsigned-byte 32)
+                           :fill-pointer 0 :adjustable t))
+          (seqs (make-array 2400000 :element-type '(unsigned-byte 32)
+                            :fill-pointer 0 :adjustable t))
+          (froms (make-array 2400000 :element-type '(unsigned-byte 32)
+                             :fill-pointer 0 :adjustable t))
+          (vias (make-array 2400000 :element-type '(signed-byte 32)
+                            :fill-pointer 0 :adjustable t)))
+      (postmodern:with-connection conn
+        (loop with offset = 0
+              for rows = (postmodern:query
+                          (format nil "SELECT id, seq, \"from\", via FROM conjugation ORDER BY id LIMIT ~a OFFSET ~a"
+                                  chunk offset)
+                          :lists)
+              while rows
+              do (dolist (pl rows)
+                   (destructuring-bind (id seq from via) pl
+                     (vector-push-extend id ids)
+                     (vector-push-extend seq seqs)
+                     (vector-push-extend from froms)
+                     (vector-push-extend (if (eql via :null) -1 via) vias)))
+                 (incf offset chunk)))
+      (let* ((n (fill-pointer ids))
+             (ids-v (int-u32-col ids n))
+             (seqs-v (int-u32-col seqs n))
+             (froms-v (int-u32-col froms n))
+             (vias-v (make-array n :element-type '(signed-byte 32))))
+        (replace vias-v vias)
+        (let ((major (int-sort-positions
+                      n (lambda (i) (+ (ash (aref seqs-v i) 32)
+                                       (aref ids-v i))))))
+          (sb-ext:gc :full t)
+          (let ((after (sb-kernel:dynamic-usage)))
+            (values (list :n n :ids ids-v :seqs seqs-v :froms froms-v
+                          :vias vias-v :major major
+                          :by-seq (int-group-ranges
+                                   major n (lambda (r) (aref seqs-v r))))
+                    (- after before))))))))
+
+(defun int-conj-row-count (table)
+  (getf table :n))
+
+(defun int-has-conj-p (table seq)
+  (nth-value 1 (gethash seq (getf table :by-seq))))
+
+(defun int-conj-rows-by-seq (table seq)
+  "List of (id seq from via-or-nil) for SEQ in id order."
+  (let ((range (gethash seq (getf table :by-seq))))
+    (when range
+      (loop for k from (car range) below (+ (car range) (cdr range))
+            for i = (aref (getf table :major) k)
+            collect (list (aref (getf table :ids) i)
+                          (aref (getf table :seqs) i)
+                          (aref (getf table :froms) i)
+                          (let ((v (aref (getf table :vias) i)))
+                            (if (= v -1) nil v)))))))
+
+(defun int-load-conj-prop (&key (chunk 200000) conn)
+  "Load conj_prop (id conj-id type pos neg fml). ORDER BY id."
+  (sb-ext:gc :full t)
+  (let ((before (sb-kernel:dynamic-usage)))
+    (let ((conn (or conn (default-conn)))
+          (ids (make-array 2400000 :element-type '(unsigned-byte 32)
+                           :fill-pointer 0 :adjustable t))
+          (conj-ids (make-array 2400000 :element-type '(unsigned-byte 32)
+                                :fill-pointer 0 :adjustable t))
+          (type-ids (make-array 2400000 :element-type '(unsigned-byte 32)
+                                :fill-pointer 0 :adjustable t))
+          (pos-ids (make-array 2400000 :element-type '(unsigned-byte 32)
+                               :fill-pointer 0 :adjustable t))
+          (flags (make-array 2400000 :element-type '(unsigned-byte 8)
+                             :fill-pointer 0 :adjustable t))
+          (types (make-array 256 :fill-pointer 0 :adjustable t))
+          (type-index (make-hash-table :test 'equal))
+          (poss (make-array 1024 :fill-pointer 0 :adjustable t))
+          (pos-index (make-hash-table :test 'equal)))
+      (labels ((pool (s vec idx)
+                 (or (gethash s idx)
+                     (let ((i (fill-pointer vec)))
+                       (vector-push-extend s vec)
+                       (setf (gethash s idx) i)
+                       i))))
+        (postmodern:with-connection conn
+          (loop with offset = 0
+                for rows = (postmodern:query
+                            (format nil "SELECT id, conj_id, conj_type, pos, neg, fml FROM conj_prop ORDER BY id LIMIT ~a OFFSET ~a"
+                                    chunk offset)
+                            :lists)
+                while rows
+                do (dolist (pl rows)
+                     (destructuring-bind (id conj-id conj-type pos neg fml) pl
+                       (vector-push-extend id ids)
+                       (vector-push-extend conj-id conj-ids)
+                       (vector-push-extend (pool conj-type types type-index) type-ids)
+                       (vector-push-extend (pool pos poss pos-index) pos-ids)
+                       (vector-push-extend (logior (if neg 1 0) (if fml 2 0)) flags)))
+                   (incf offset chunk))))
+      (let* ((n (fill-pointer ids))
+             (ids-v (int-u32-col ids n))
+             (conj-v (int-u32-col conj-ids n))
+             (type-v (int-u32-col type-ids n))
+             (pos-v (int-u32-col pos-ids n))
+             (flags-v (make-array n :element-type '(unsigned-byte 8))))
+        (replace flags-v flags)
+        (let ((major (int-sort-positions
+                      n (lambda (i) (+ (ash (aref conj-v i) 32)
+                                       (aref ids-v i))))))
+          (sb-ext:gc :full t)
+          (let ((after (sb-kernel:dynamic-usage)))
+            (values (list :n n :ids ids-v :conj-ids conj-v
+                          :types (coerce types 'simple-vector)
+                          :type-ids type-v
+                          :poss (coerce poss 'simple-vector)
+                          :pos-ids pos-v :flags flags-v
+                          :major major
+                          :by-conj (int-group-ranges
+                                    major n (lambda (r) (aref conj-v r))))
+                    (- after before))))))))
+
+(defun int-conj-prop-row-count (table)
+  (getf table :n))
+
+(defun int-conj-props-by-id (table conj-id)
+  "List of (id conj-id type pos neg fml) for CONJ-ID in id order.
+   CONJ-ID is echoed so callers can destructure all six slots."
+  (let ((range (gethash conj-id (getf table :by-conj))))
+    (when range
+      (loop for k from (car range) below (+ (car range) (cdr range))
+            for i = (aref (getf table :major) k)
+            collect (list (aref (getf table :ids) i)
+                          conj-id
+                          (aref (getf table :types) (aref (getf table :type-ids) i))
+                          (aref (getf table :poss) (aref (getf table :pos-ids) i))
+                          (plusp (logand (aref (getf table :flags) i) 1))
+                          (plusp (logand (aref (getf table :flags) i) 2)))))))
+
+(defun int-load-csr (&key (chunk 200000) conn)
+  "Load conj_source_reading (id conj-id text source-text). ORDER BY id."
+  (sb-ext:gc :full t)
+  (let ((before (sb-kernel:dynamic-usage)))
+    (let ((conn (or conn (default-conn)))
+          (ids (make-array 8400000 :element-type '(unsigned-byte 32)
+                           :fill-pointer 0 :adjustable t))
+          (conj-ids (make-array 8400000 :element-type '(unsigned-byte 32)
+                                :fill-pointer 0 :adjustable t))
+          (text-ids (make-array 8400000 :element-type '(unsigned-byte 32)
+                                :fill-pointer 0 :adjustable t))
+          (src-ids (make-array 8400000 :element-type '(unsigned-byte 32)
+                               :fill-pointer 0 :adjustable t))
+          (texts (make-array 1024 :fill-pointer 0 :adjustable t))
+          (text-index (make-hash-table :test 'equal))
+          (srcs (make-array 1024 :fill-pointer 0 :adjustable t))
+          (src-index (make-hash-table :test 'equal)))
+      (labels ((pool (s vec idx)
+                 (or (gethash s idx)
+                     (let ((i (fill-pointer vec)))
+                       (vector-push-extend s vec)
+                       (setf (gethash s idx) i)
+                       i))))
+        (postmodern:with-connection conn
+          (loop with offset = 0
+                for rows = (postmodern:query
+                            (format nil "SELECT id, conj_id, text, source_text FROM conj_source_reading ORDER BY id LIMIT ~a OFFSET ~a"
+                                    chunk offset)
+                            :lists)
+                while rows
+                do (dolist (pl rows)
+                     (destructuring-bind (id conj-id text source-text) pl
+                       (vector-push-extend id ids)
+                       (vector-push-extend conj-id conj-ids)
+                       (vector-push-extend (pool text texts text-index) text-ids)
+                       (vector-push-extend (pool source-text srcs src-index) src-ids)))
+                   (incf offset chunk))))
+      (let* ((n (fill-pointer ids))
+             (ids-v (int-u32-col ids n))
+             (conj-v (int-u32-col conj-ids n))
+             (text-v (int-u32-col text-ids n))
+             (src-v (int-u32-col src-ids n))
+             (texts-v (coerce texts 'simple-vector))
+             (srcs-v (coerce srcs 'simple-vector)))
+        (let ((major (int-sort-positions
+                      n (lambda (i) (+ (ash (aref conj-v i) 32)
+                                       (aref ids-v i))))))
+          (sb-ext:gc :full t)
+          (let ((after (sb-kernel:dynamic-usage)))
+            (values (list :n n :ids ids-v :conj-ids conj-v
+                          :texts texts-v :text-ids text-v
+                          :srcs srcs-v :src-ids src-v
+                          :major major
+                          :by-conj (int-group-ranges
+                                    major n (lambda (r) (aref conj-v r))))
+                    (- after before))))))))
+
+(defun int-csr-row-count (table)
+  (getf table :n))
+
+(defun int-csr-by-id (table conj-id)
+  "List of (text source-text) for CONJ-ID in id order."
+  (let ((range (gethash conj-id (getf table :by-conj))))
+    (when range
+      (loop for k from (car range) below (+ (car range) (cdr range))
+            for i = (aref (getf table :major) k)
+            collect (list (aref (getf table :texts) (aref (getf table :text-ids) i))
+                          (aref (getf table :srcs) (aref (getf table :src-ids) i)))))))

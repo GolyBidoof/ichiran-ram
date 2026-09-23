@@ -73,10 +73,13 @@
 (defmethod ichiran/dict::get-text ((obj compact-kanji))
   (compact-kanji-text obj))
 (defmethod ichiran/dict::get-kana ((obj compact-kanji))
-  (let ((bk (compact-kanji-best-kana obj)))
+  ;; Mirror the kanji-text method exactly: conjugation-aware best kana first
+  ;; (best-kana-conj walks to the parent entry via query-parents-kanji, which
+  ;; is RAM-served when the conjugation trio is loaded), then the
+  ;; kana_text regex fallback.
+  (let ((bk (ichiran/dict::best-kana-conj obj)))
     (if (eql bk :null)
-        (or (memdict-kanji-kana-fallback (compact-kanji-text obj) (compact-kanji-seq obj))
-            (compact-kanji-text obj))
+        (ichiran/dict::get-kanji-kana-old obj)
         bk)))
 (defmethod ichiran/dict::word-type ((obj compact-kanji))
   :kanji)
@@ -91,6 +94,11 @@
 (defmethod ichiran/dict::conjugate-p ((obj compact-kana)) (compact-kana-conjugate-p obj))
 (defmethod ichiran/dict::nokanji ((obj compact-kana)) (compact-kana-nokanji obj))
 (defmethod ichiran/dict::best-kana ((obj compact-kana)) (compact-kana-best-kana obj))
+(defmethod ichiran/dict::best-kanji ((obj compact-kana)) (compact-kana-best-kanji obj))
+(defmethod ichiran/dict::get-kanji ((obj compact-kana))
+  ;; Mirror the kana-text method: conjugation-aware best kanji, else NIL.
+  (let ((bk (ichiran/dict::best-kanji-conj obj)))
+    (unless (eql bk :null) bk)))
 (defmethod ichiran/dict::id ((obj compact-kana)) (compact-kana-id obj))
 
 (defmethod ichiran/dict::text ((obj compact-kanji)) (compact-kanji-text obj))
