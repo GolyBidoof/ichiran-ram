@@ -134,8 +134,9 @@
          (ichiran/dict::*memdict-fn-cache*
            (copy-memo-table ichiran/dict::*memdict-fn-cache*)))
      ;; NOTE: cl-ppcre in this tree exposes no scanner cache at all, so there
-     ;; is no shared scanner table to protect (this is also why regexes are
-     ;; recompiled per call, and why memoizing them measured as no help).
+     ;; is no shared scanner table to protect. Caching scanners was tried
+     ;; anyway and LOST: see worklogs/LOAD-AND-SPEED-PLAN.md ("allocation share
+     ;; is not time share").
      (if *db-available*
          (ichiran/conn:with-db nil ,@body)
          (progn ,@body))))

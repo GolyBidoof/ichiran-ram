@@ -191,6 +191,59 @@ it removes allocation on the path that the bandwidth analysis above says is
 the limiter, and because a predicate is the honest construct for a boolean
 test — but it is not a headline number.
 
+## Measurement methodology (this bit matters)
+
+Single-run sequential A/B on this machine has **~10% run-to-run drift**: the
+same code measured 1.443s in one process and 1.778s in another. Two
+conclusions in this log were drawn from such runs and had to be corrected.
+
+The fix is to buy the comparison in the same boxes: alternate the two arms in
+separate processes, several pairs, and compare paired results. Doing that for
+the `INTERSECTION` allocation change (3 interleaved pairs, 140 the visual novel lines,
+best-of-3 inside each process):
+
+| config | baseline | patched | verdict |
+|---|---|---|---|
+| serial | 1.709 / 1.778 / 1.694s | 1.657 / 1.604 / 1.539s | patched faster in **all 3 pairs**, ~6-7% |
+| 10 workers | 0.266 / 0.272 / 0.278s | 0.272 / 0.272 / 0.246s | no reliable difference |
+| 14 workers | 0.254 / 0.250 / 0.274s | 0.303 / 0.255 / 0.247s | no reliable difference |
+
+So the serial win is real and the parallel win is not, which is what the
+bandwidth analysis predicts: the serial path is limited by allocation work,
+while the parallel path is limited by the memory subsystem and does not care
+how many bytes were consed. Any future claim smaller than ~10% needs this
+treatment before it is believed.
+
+## Allocation share is not time share
+
+The allocation profile is useful but must not be read as a speed ranking. It
+puts scanner construction plus `CL-PPCRE::CONVERT` at roughly 10% of allocated
+bytes, because a compiled scanner is a large object. Caching scanners by
+pattern was therefore tried, twice:
+
+| variant | serial | 10 workers |
+|---|---|---|
+| no cache | 1.585s | 0.242s |
+| cache keyed on a flag list | 1.653s | 0.247s |
+| cache keyed on the pattern string alone | 1.692s | 0.268s |
+
+Neither helped, and removing the key consing did not rescue it. The reason is
+that compiling these patterns is cheap: `[々ヶ〆一-龯]` and `[ァ-ヺヽヾ]` are
+trivial character classes, so the scanner is large to *store* but fast to
+*build*, and a cache adds a generic-function `:around` plus a hash lookup to
+all 727 calls per line to avoid work that was never expensive.
+
+This is now the fourth regex-adjacent memoisation to lose here (with
+`kanji-regex` and `simplify-ngrams`). **Treat the allocation profile as a list
+of candidates for reducing garbage, never as a speed ranking**, and remember
+that caching only pays when the computation is expensive relative to the
+lookup.
+
+Worth recording for the same reason: `subseq-slice` already avoids copying.
+It uses `adjust-array` with `:displaced-to`, so candidate substrings are views
+over the input string, not fresh heap strings. The 1,171 calls per line
+allocate one small slice header each, not 1,171 string copies.
+
 ## The one thing that would change everything
 
 A 32GB+ host would let `save-lisp-and-die` bake the whole 8.1GB dictionary,
