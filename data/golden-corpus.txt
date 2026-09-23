@@ -362,3 +362,27 @@ QRコードを読み取ってください
 この道を行くと駅に着きます
 行方不明の子供を探しています
 手前の交差点を右に曲がってください
+# Suffix and conjugation coverage. The corpus above did not exercise the
+# defsuffix paths at all, so a suffixed compact row falling through an etypecase
+# crashed the RAM path on 偽れない while the database path was fine, and nothing
+# here caught it. These lines cover negative, polite, passive, causative,
+# passive-causative, desiderative, conditional, imperative, prohibitive,
+# obligative, preparatory and honorific forms.
+偽れない
+偽れないと信じたい
+食べさせられたくない
+行かせていただけませんか
+読まれてしまった
+待たされている
+話したくなかった
+頑張らなければならない
+見られてしまいそう
+やらせておいてください
+来なければよかった
+すませておきます
+知らされていなかった
+やめとけばよかった
+ありがとうございました
+お願いいたします
+申し訳ございません
+召し上がってください
