@@ -447,6 +447,24 @@
                           :nokanji (getf plist :nokanji)
                           :best-kana (or (getf plist :best-kana) :null))))
 
+(defun decode-int-row-at (kana-p table row)
+  "Build a compact-kana/kanji struct directly from TABLE's columns at ROW,
+   with no plist intermediate (int-text-row's plist was a per-lookup cost on
+   a very hot path). Fresh struct every call, since the analyzer mutates
+   readings."
+  (multiple-value-bind (id seq text ord common common-tags conj-p nokanji
+                        best-kanji best-kana)
+      (funcall (int-fn 'int-text-row-fields) table row)
+    (if kana-p
+        (make-compact-kana :id id :seq seq :text text :ord ord
+                           :common common :common-tags common-tags
+                           :conjugate-p conj-p :nokanji nokanji
+                           :best-kanji (or best-kanji :null))
+        (make-compact-kanji :id id :seq seq :text text :ord ord
+                            :common common :common-tags common-tags
+                            :conjugate-p conj-p :nokanji nokanji
+                            :best-kana (or best-kana :null)))))
+
 (defun int-conj-tables-present-p ()
   "T when all three conjugation int tables are registered."
   (and (gethash "conjugation" *int-tables*)
@@ -469,14 +487,14 @@
     (cond ((or (string= name "kana-text") (string= name "kana_text"))
            (or (let ((it (gethash "kana_text" *int-tables*)))
                  (when it
-                   (mapcar (lambda (pl) (decode-int-row t pl))
-                           (funcall (int-fn 'int-text-find-rows) it text))))
+                   (mapcar (lambda (r) (decode-int-row-at t it r))
+                           (funcall (int-fn 'int-text-find-rows-indexes) it text))))
                (memdict-copy-rows (gethash text *kana-by-text*))))
           ((or (string= name "kanji-text") (string= name "kanji_text"))
            (or (let ((it (gethash "kanji_text" *int-tables*)))
                  (when it
-                   (mapcar (lambda (pl) (decode-int-row nil pl))
-                           (funcall (int-fn 'int-text-find-rows) it text))))
+                   (mapcar (lambda (r) (decode-int-row-at nil it r))
+                           (funcall (int-fn 'int-text-find-rows-indexes) it text))))
                (memdict-copy-rows (gethash text *kanji-by-text*))))
           (t nil))))
 
@@ -486,14 +504,14 @@
     (cond ((or (string= name "kana-text") (string= name "kana_text"))
            (or (let ((it (gethash "kana_text" *int-tables*)))
                  (when it
-                   (mapcar (lambda (pl) (decode-int-row t pl))
-                           (funcall (int-fn 'int-text-find-by-seq) it seq))))
+                   (mapcar (lambda (r) (decode-int-row-at t it r))
+                           (funcall (int-fn 'int-text-find-by-seq-indexes) it seq))))
                (memdict-copy-rows (gethash seq *kana-by-seq*))))
           ((or (string= name "kanji-text") (string= name "kanji_text"))
            (or (let ((it (gethash "kanji_text" *int-tables*)))
                  (when it
-                   (mapcar (lambda (pl) (decode-int-row nil pl))
-                           (funcall (int-fn 'int-text-find-by-seq) it seq))))
+                   (mapcar (lambda (r) (decode-int-row-at nil it r))
+                           (funcall (int-fn 'int-text-find-by-seq-indexes) it seq))))
                (memdict-copy-rows (gethash seq *kanji-by-seq*))))
           (t nil))))
 
@@ -657,9 +675,10 @@
                 (memdict-table-loaded-p "kana_text"))
            (or (let ((it (gethash "kana_text" *int-tables*)))
                  (when it
-                   (loop for pl in (funcall (int-fn 'int-text-find-by-seq) it seq)
-                         when (equal (getf pl :text) text)
-                           collect (decode-int-row t pl))))
+                   (loop for r in (funcall (int-fn 'int-text-find-by-seq-indexes) it seq)
+                         for row = (decode-int-row-at t it r)
+                         when (equal (compact-kana-text row) text)
+                           collect row)))
                (loop for r in (gethash seq *kana-by-seq*)
                      when (equal (compact-kana-text r) text)
                        collect (copy-compact-kana r))))
@@ -667,9 +686,10 @@
                 (memdict-table-loaded-p "kanji_text"))
            (or (let ((it (gethash "kanji_text" *int-tables*)))
                  (when it
-                   (loop for pl in (funcall (int-fn 'int-text-find-by-seq) it seq)
-                         when (equal (getf pl :text) text)
-                           collect (decode-int-row nil pl))))
+                   (loop for r in (funcall (int-fn 'int-text-find-by-seq-indexes) it seq)
+                         for row = (decode-int-row-at nil it r)
+                         when (equal (compact-kanji-text row) text)
+                           collect row)))
                (loop for r in (gethash seq *kanji-by-seq*)
                      when (equal (compact-kanji-text r) text)
                         collect (copy-compact-kanji r)))))))
@@ -683,16 +703,16 @@
                 (memdict-table-loaded-p "kana_text"))
            (or (let ((it (gethash "kana_text" *int-tables*)))
                  (when it
-                   (mapcar (lambda (pl) (decode-int-row t pl))
-                           (funcall (int-fn 'int-text-rows-by-seq) it seq))))
+                   (mapcar (lambda (r) (decode-int-row-at t it r))
+                           (funcall (int-fn 'int-text-rows-by-seq-indexes) it seq))))
                (stable-sort (memdict-copy-rows (gethash seq *kana-by-seq*))
                             '< :key 'compact-kana-ord)))
           ((and (or (string= name "kanji-text") (string= name "kanji_text"))
                 (memdict-table-loaded-p "kanji_text"))
            (or (let ((it (gethash "kanji_text" *int-tables*)))
                  (when it
-                   (mapcar (lambda (pl) (decode-int-row nil pl))
-                           (funcall (int-fn 'int-text-rows-by-seq) it seq))))
+                   (mapcar (lambda (r) (decode-int-row-at nil it r))
+                           (funcall (int-fn 'int-text-rows-by-seq-indexes) it seq))))
                (stable-sort (memdict-copy-rows (gethash seq *kanji-by-seq*))
                             '< :key 'compact-kanji-ord))))))
 
@@ -899,9 +919,10 @@
               (dolist (sr (funcall (int-fn 'int-csr-by-id) csr-tab cid))
                 (destructuring-bind (ctext csrc) sr
                   (when (equal ctext text)
-                    (dolist (row (funcall (int-fn 'int-text-find-by-seq) txt-tab target))
-                      (when (equal (getf row :text) csrc)
-                        (push (list (getf row :id) cid) found)))))))))
+                    (dolist (r (funcall (int-fn 'int-text-find-by-seq-indexes) txt-tab target))
+                      (let ((row (decode-int-row-at t txt-tab r)))
+                        (when (equal (compact-kana-text row) csrc)
+                          (push (list (compact-kana-id row) cid) found))))))))))
         (nreverse found)))))
 
 ;;; ---- R7: integer-backend bulk loader ----
@@ -1040,11 +1061,11 @@
    only: compact cores keep using get-dao (they have no id index)."
   (let ((it (gethash table-name *int-tables*)))
     (when it
-      (let ((pl (funcall (int-fn 'int-text-by-id) it id)))
-        (when pl
+      (let ((row (funcall (int-fn 'int-text-index-by-id) it id)))
+        (when row
           ;; kana-p: kana_table rows decode to compact-kana, kanji rows to
           ;; compact-kanji.
-          (decode-int-row (not (search "kanji" table-name)) pl))))))
+          (decode-int-row-at (not (search "kanji" table-name)) it row))))))
 
 (defun memdict-csr-texts (conj-id source-text)
   "RAM mirror of (SELECT text FROM conj_source_reading WHERE conj_id = ?

@@ -19,6 +19,8 @@
            #:int-text-row-count #:int-text-table-p
            #:int-text-row #:int-text-find-rows #:int-text-rows-by-seq
            #:int-text-find-by-seq #:int-text-by-id
+           #:int-text-row-fields #:int-text-find-rows-indexes #:int-text-index-by-id
+           #:int-text-rows-by-seq-indexes #:int-text-find-by-seq-indexes
            #:int-load-entry #:int-entry-by-seq #:int-entry-row-count
            #:int-load-conjugation #:int-conj-row-count
            #:int-has-conj-p #:int-conj-rows-by-seq #:int-conj-seqs-by-from
@@ -210,6 +212,60 @@
               do (let ((ti (aref (int-text-table-text-ids table) row)))
                    (return (aref (int-text-table-texts table) ti)))))))
 
+(defun int-text-row-fields (table row)
+  "The ten decoded text-row fields as multiple values, without consing a
+   plist: id seq text ord common common-tags conjugate-p nokanji
+   best-kanji best-kana. Callers build their struct directly from these."
+  (values (aref (int-text-table-ids table) row)
+          (aref (int-text-table-seqs table) row)
+          (aref (int-text-table-texts table)
+                (aref (int-text-table-text-ids table) row))
+          (aref (int-text-table-ords table) row)
+          (let ((c (aref (int-text-table-commons table) row)))
+            (if (= c -1) :null c))
+          (aref (int-text-table-tags table)
+                (aref (int-text-table-tag-ids table) row))
+          (plusp (logand (aref (int-text-table-flags table) row) 1))
+          (plusp (logand (aref (int-text-table-flags table) row) 2))
+          (let ((b (aref (int-text-table-kanjis table)
+                         (aref (int-text-table-kanji-ids table) row))))
+            (if (equal b "") nil b))
+          (let ((b (aref (int-text-table-kanas table)
+                         (aref (int-text-table-kana-ids table) row))))
+            (if (equal b "") nil b))))
+
+(defun int-text-find-rows-indexes (table text)
+  "Row indexes for TEXT in id order. NIL if none."
+  (multiple-value-bind (ti found) (gethash text (int-text-table-text-index table))
+    (when found
+      (let ((start (aref (int-text-table-text-start table) ti))
+            (count (aref (int-text-table-text-count table) ti)))
+        (loop for k from start below (+ start count)
+              for row = (aref (int-text-table-text-major table) k)
+              collect row)))))
+
+(defun int-text-rows-by-seq-indexes (table seq)
+  "Row indexes for SEQ in ord order. NIL if none."
+  (when (<= seq (int-text-table-max-seq table))
+    (let ((start (aref (int-text-table-seq-start table) seq))
+          (count (aref (int-text-table-seq-count table) seq)))
+      (when (plusp count)
+        (stable-sort (loop for k from start below (+ start count)
+                           for row = (aref (int-text-table-seq-major table) k)
+                           collect row)
+                     '< :key (lambda (r) (aref (int-text-table-ords table) r)))))))
+
+(defun int-text-find-by-seq-indexes (table seq)
+  "Row indexes for SEQ in id order. NIL if none."
+  (when (<= seq (int-text-table-max-seq table))
+    (let ((start (aref (int-text-table-seq-start table) seq))
+          (count (aref (int-text-table-seq-count table) seq)))
+      (when (plusp count)
+        (sort (loop for k from start below (+ start count)
+                    for row = (aref (int-text-table-seq-major table) k)
+                    collect row)
+              '< :key (lambda (r) (aref (int-text-table-ids table) r)))))))
+
 (defun int-text-row (table row)
   "Decode ROW (integer index) to a plist with all fields. BEST is the
    best-kanji/best-kana string or NIL (:null in DB); SIDE tells which."
@@ -230,6 +286,19 @@
           :best-kana (let ((b (aref (int-text-table-kanas table)
                                     (aref (int-text-table-kana-ids table) row))))
                        (if (equal b "") nil b))))
+
+(defun int-text-index-by-id (table id)
+  "Row index for primary key ID, or NIL. Binary search over the ascending
+   ids vector (ids have gaps, so id-1 is not an index)."
+  (let ((ids (int-text-table-ids table)))
+    (loop with lo = 0
+          with hi = (1- (length ids))
+          while (<= lo hi)
+          for mid = (ash (+ lo hi) -1)
+          for v = (aref ids mid)
+          do (cond ((= v id) (return mid))
+                   ((< v id) (setf lo (1+ mid)))
+                   (t (setf hi (1- mid)))))))
 
 (defun int-text-by-id (table id)
   "Decoded row plist for primary key ID, or NIL. IDS is ascending (loaded
