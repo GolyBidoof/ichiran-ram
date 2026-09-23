@@ -198,7 +198,14 @@
 
 (defun init-suffixes-thread ()
   (sb-thread:with-mutex (*init-suffixes-lock* :wait-p nil)
-    (with-connection *connection*
+    ;; WITH-DICT-CONNECTION, not WITH-CONNECTION: in a baked core *CONNECTION*
+    ;; is NIL, and WITH-CONNECTION on NIL opens a fresh connection with the
+    ;; default spec. That made this background builder the one thing that still
+    ;; required a live PostgreSQL: with the server stopped, ROMANIZE signaled
+    ;; DATABASE-SOCKET-ERROR from INIT-SUFFIXES-THREAD even though
+    ;; RAM-DICT-SERVES-P was already true and every table was resident. The
+    ;; helpers below (GET-KANA-FORM, SEQ, TEXT) are all served from RAM.
+    (with-dict-connection
       (labels ((update-suffix-cache (text new &key join)
                  (let ((old (gethash text *suffix-cache*)))
                    (setf (gethash text *suffix-cache*)
