@@ -125,8 +125,15 @@ retries that body with a connection rather than changing behavior.
 | | before | after |
 | --- | --- | --- |
 | JSON for 382 golden lines | 19.03 s | 1.90 s |
-| per line | 49.9 ms | 5.0 ms |
+| serving, per line | 49.9 ms | 5.0 ms |
+| plain analysis for 382 lines | 1.52 s | 0.79 s |
+| plain analysis, per line | 3.99 ms | 2.07 ms |
 | with no database at all | did not run | 382 lines, 0 mismatches |
+
+The plain-text path gained too, because `dict-segment` carried the same wrapper:
+one connection per line, worth 2.8 ms against a 4 ms line. Note that the stage
+table at the top of this document was measured before that, so its per-stage
+figures include some of that overhead and now overstate the analysis cost.
 
 Output is byte-identical in both cases, verified against a reference dump that
 was itself confirmed deterministic across runs (two dumps, same bytes).
