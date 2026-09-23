@@ -1,12 +1,7 @@
 ;;; warm-server.lisp — a long-lived, warmed process that evaluates forms sent
 ;;; on stdin. Started by warm.sh; exists so that measurements do not each pay
 ;;; the Quicklisp + snapshot load (~10s) again.
-(ql:quickload (list :ichiran :ichiran/cli) :silent t)
-(load "src/memdict-compact.lisp")
-(load "src/memdict-int.lisp")
-(load "src/memdict-compact-shims.lisp")
-(load "src/int-snapshot.lisp")
-(load "src/serve-parallel.lisp")
+(ql:quickload (list :ichiran :ichiran/cli :ichiran/ram) :silent t)
 (in-package :cl-user)
 (eval-when (:compile-toplevel :load-toplevel :execute) (require :sb-sprof))
 

@@ -1,11 +1,7 @@
 ;; Everything that defines a package must run at TOP LEVEL, before the reader
 ;; reaches the forms that reference those packages. SBCL reads a file form by
 ;; form, so a (load ...) hidden inside a function body is too late.
-(ql:quickload (list :ichiran :ichiran/cli) :silent t)
-(load "src/memdict-compact.lisp")
-(load "src/memdict-int.lisp")
-(load "src/memdict-compact-shims.lisp")
-(load "src/int-snapshot.lisp")
+(ql:quickload (list :ichiran :ichiran/cli :ichiran/ram) :silent t)
 (in-package :cl-user)
 (defvar *t-sys* (/ (get-internal-real-time) internal-time-units-per-second))
 (defun now () (/ (get-internal-real-time) internal-time-units-per-second))

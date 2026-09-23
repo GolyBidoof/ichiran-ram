@@ -73,3 +73,21 @@
 #+sb-core-compression
 (defmethod asdf:perform ((o asdf:image-op) (c asdf:system))
   (uiop:dump-image (asdf:output-file o c) :executable t :compression t))
+
+
+(defsystem #:ichiran/ram
+  :serial t
+  :description "In-RAM dictionary layer and parallel serving for ichiran"
+  :author "Timofei Shatrov <timofei.shatrov@example.com> (upstream ichiran);
+             RAM layer by GolyBidoof"
+  :license "MIT"
+  :depends-on (#:ichiran)
+  ;; These were loaded as loose source files, so every process start RECOMPILED
+  ;; them. As system components ASDF compiles them once into fasls and later
+  ;; starts just load, which is most of the difference between a slow boot and
+  ;; a fast one. Order is the load order they already required.
+  :components ((:file "src/memdict-compact")
+               (:file "src/memdict-int")
+               (:file "src/memdict-compact-shims")
+               (:file "src/int-snapshot")
+               (:file "src/serve-parallel")))
