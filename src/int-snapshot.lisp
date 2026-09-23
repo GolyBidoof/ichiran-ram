@@ -25,7 +25,8 @@
 
 (defpackage #:ichiran/int-snapshot
   (:use #:cl)
-  (:export #:int-snapshot-save #:int-snapshot-load #:int-snapshot-file-p))
+  (:export #:int-snapshot-save #:int-snapshot-load #:int-snapshot-file-p
+           #:int-snapshot-stamp #:check-snapshot-pair))
 
 (in-package #:ichiran/int-snapshot)
 
@@ -35,7 +36,17 @@
 (defparameter *magic* "ICHSNAP1"
   "8-byte file magic.")
 
-(defparameter *version* 5)
+(defparameter *version* 6)
+
+(defparameter *build-stamp* (format nil "~d" (get-universal-time))
+  "Stamped into every snapshot written by this process, so the word layer and
+   the sense layer can prove they came from the same database state.
+   build-snapshot.sh writes both in one run, so both get this value.
+   The magic and the format version catch a snapshot written by different code.
+   Neither catches two files written from different DATABASE CONTENTS, and the
+   two files share an id space: the sense layer is keyed by sense-id and the
+   integer layer refers into it. Rebuilding one without the other would
+   otherwise load cleanly and silently attach glosses to the wrong senses.")
 
 (defparameter *elem-types*
   '((unsigned-byte 8) (unsigned-byte 32) (signed-byte 32) fixnum)
@@ -374,6 +385,9 @@
            (sink-u8 snk *version*)
            (sink-u8 snk 1)                     ; endianness marker (1 = LE)
            (sink-u32 snk (length tables))
+           ;; Straight after the header so it can be read without walking the
+           ;; file: see INT-SNAPSHOT-STAMP and CHECK-SNAPSHOT-PAIR.
+           (write-string* snk *build-stamp*)
            (dolist (entry tables)
              (let* ((name (car entry))
                     (object (cdr entry))
@@ -400,6 +414,33 @@
             (sb-posix:close fd)))
       (error () nil))))
 
+(defun int-snapshot-stamp (path)
+  "The build stamp of the snapshot at PATH, read straight from its header
+   without walking the tables. NIL when PATH is missing or unreadable."
+  (when (probe-file path)
+    (handler-case
+        (let ((fd (sb-posix:open path sb-posix:o-rdonly)))
+          (unwind-protect
+               (let ((src (make-source fd)))
+                 (source-octets src (length *magic*))  ; magic
+                 (source-u8 src)                       ; version
+                 (source-u8 src)                       ; endianness
+                 (source-u32 src)                      ; table count
+                 (read-string* src))
+            (sb-posix:close fd)))
+      (error () nil))))
+
+(defun check-snapshot-pair (int-path sense-path)
+  "Signal an error unless both snapshots were written by the same build."
+  (let ((a (int-snapshot-stamp int-path))
+        (b (int-snapshot-stamp sense-path)))
+    (when (and a b (not (equal a b)))
+      (error "int-snapshot: ~a (build ~a) and ~a (build ~a) were not written ~
+              together, so they may describe different databases. Rebuild both ~
+              with scripts/build-snapshot.sh."
+             int-path a sense-path b))
+    (values a b)))
+
 (defun int-snapshot-load (path)
   "Read a snapshot and return an alist of (name . object) in file order."
   (let ((fd (sb-posix:open path sb-posix:o-rdonly)))
@@ -416,6 +457,7 @@
              (unless (= endian 1)
                (error "int-snapshot: foreign-endian snapshot")))
            (let* ((ntables (source-u32 src))
+                  (stamp (read-string* src))
                   (out nil)
                   ;; Split the two costs, because they need opposite fixes:
                   ;; a read-bound load wants mmap, an index-rebuild-bound load
@@ -424,6 +466,8 @@
                   (rec-t 0)
                   (per-table nil)
                   (t0 (get-internal-real-time)))
+             (unless (stringp stamp)
+               (error "int-snapshot: ~a has no build stamp" path))
              (dotimes (i ntables)
                (let* ((name (read-string* src))
                       (nfields (source-u32 src))

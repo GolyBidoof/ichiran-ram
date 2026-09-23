@@ -103,14 +103,18 @@
     (if (probe-file sense-snapshot)
         (progn
           (format t "~&load-dictionary: sense layer from ~a (no database)~%" sense-snapshot)
-          (ichiran/memdict-compact:memdict-load-sense-snapshot sense-snapshot))
+          (ichiran/memdict-compact:memdict-load-sense-snapshot
+           sense-snapshot :int-snapshot int-snapshot))
         (progn
           (format t "~&load-dictionary: sense layer from PostgreSQL~%")
           (ichiran/memdict-compact:memdict-load
            :chunk 200000 :tables '("sense" "gloss" "sense_prop"))))
     (setf ichiran/dict::*memdict-p* t)
     (warm-caches)
-    (setf *db-available* t))
+    ;; Probed, not asserted. On the snapshot path nothing above touched
+    ;; PostgreSQL, so claiming T here would tell workers to open connections
+    ;; for fallback paths without ever having checked that one can be opened.
+    (setf *db-available* (probe-db)))
   (ichiran:romanize "テスト")
   (sleep 2)
   t)

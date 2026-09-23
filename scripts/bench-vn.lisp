@@ -26,7 +26,8 @@
           (let ((s1 (now)))
             (if (probe-file "local-env/ichiran-sense.snap")
                 (ichiran/memdict-compact:memdict-load-sense-snapshot
-                 "local-env/ichiran-sense.snap")
+                 "local-env/ichiran-sense.snap"
+                 :int-snapshot "local-env/ichiran-int.snap")
                 (ichiran/memdict-compact:memdict-load
                  :chunk 200000 :tables '("sense" "gloss" "sense_prop")))
             (setf sense-t (- (now) s1)))

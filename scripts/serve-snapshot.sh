@@ -48,11 +48,15 @@ cat > "$BOOT_LISP" <<'EOF'
   (let ((snap (uiop:getenv "SNAPSHOT")))
     (ichiran/conn:with-db nil
       (ichiran/memdict-compact:memdict-load-int :snapshot snap)
-      (ichiran/memdict-compact:memdict-load
-       :chunk 200000 :tables '("sense" "gloss" "sense_prop"))
+      (if (probe-file "local-env/ichiran-sense.snap")
+          (ichiran/memdict-compact:memdict-load-sense-snapshot
+           "local-env/ichiran-sense.snap" :int-snapshot snap)
+          (ichiran/memdict-compact:memdict-load
+           :chunk 200000 :tables '("sense" "gloss" "sense_prop")))
       (setf ichiran/dict::*memdict-p* t)
       (ichiran/serve-parallel:warm-caches)
-      (setf ichiran/serve-parallel::*db-available* t))
+      (setf ichiran/serve-parallel::*db-available*
+            (ichiran/serve-parallel:probe-db)))
     ;; Only the serial path announces readiness here. serve-stream prints its
     ;; own ready line on the parallel path, and two of them would desynchronize
     ;; a client that treats the first as the signal to start sending.

@@ -152,6 +152,10 @@
   "Write the sense layer to PATH. Returns the byte size."
   (ichiran/int-snapshot:int-snapshot-save path (sense-layer-tables)))
 
-(defun memdict-load-sense-snapshot (path)
-  "Load the sense layer from PATH, replacing whatever is resident."
+(defun memdict-load-sense-snapshot (path &key int-snapshot)
+  "Load the sense layer from PATH, replacing whatever is resident. When
+   INT-SNAPSHOT is given, first verify the two files were written together;
+   see ichiran/int-snapshot:check-snapshot-pair."
+  (when int-snapshot
+    (ichiran/int-snapshot:check-snapshot-pair int-snapshot path))
   (sense-layer-install (ichiran/int-snapshot:int-snapshot-load path)))
