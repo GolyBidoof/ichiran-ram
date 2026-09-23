@@ -146,6 +146,10 @@
 (defparameter *dakuten-join*
   (append (dakuten-join *dakuten-hash* #\゛) (dakuten-join *handakuten-hash* #\゜)))
 
+;; After *dakuten-join*, which it appends. normalize runs per word and this
+;; APPEND reallocated the whole map every time.
+(defparameter *normalize-marks* (append *punctuation-marks* *dakuten-join*))
+
 (defparameter *half-width-kana* "･ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝﾞﾟ")
 (defparameter *full-width-kana* "・ヲァィゥェォャュョッーアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン゛゜")
 
@@ -225,10 +229,14 @@
       (push (+ s 1 offset) positions))
     (nreverse positions)))
 
+(defparameter *kanji-mask-scanner*
+  (ppcre:create-scanner `(:greedy-repetition 1 nil (:regex ,*kanji-regex*)))
+  "Built once at load. The pattern depends only on *kanji-regex*, a constant,
+   so rebuilding it per call was pure waste on a per-candidate-word path.")
+
 (defun kanji-mask (word)
   "SQL LIKE mask for word"
-  (let ((regex (ppcre:create-scanner `(:greedy-repetition 1 nil (:regex ,*kanji-regex*)))))
-    (ppcre:regex-replace-all regex word "%")))
+  (ppcre:regex-replace-all *kanji-mask-scanner* word "%"))
 
 (defun kanji-regex (word)
   (ppcre:create-scanner
@@ -250,13 +258,23 @@
       (let ((reading-head (subseq reading 0 r-cut)))
         (concatenate 'string reading-head (subseq new-word m))))))
 
+(defvar *ngram-cache* (make-hash-table :test 'eq :size 32)
+  "MAP object -> (SCANNER . ALIST) for simplify-ngrams. Both are pure functions
+   of MAP, and MAP is a constant at every call site once *normalize-marks* is
+   used, so this is built once per distinct map instead of once per word.")
+
 (defun simplify-ngrams (str map)
-  (let* ((alist (loop for (from to) on map by #'cddr collect (cons from to)))
-         (scanner (ppcre:create-scanner (cons :alternation (mapcar #'car alist)))))
-    (ppcre:regex-replace-all scanner str
+  (let ((entry (or (gethash map *ngram-cache*)
+                   (setf (gethash map *ngram-cache*)
+                         (let ((alist (loop for (from to) on map by #'cddr
+                                            collect (cons from to))))
+                           (cons (ppcre:create-scanner
+                                  (cons :alternation (mapcar #'car alist)))
+                                 alist))))))
+    (ppcre:regex-replace-all (car entry) str
                              (lambda (match &rest rest)
                                (declare (ignore rest))
-                               (cdr (assoc match alist :test #'equal)))
+                               (cdr (assoc match (cdr entry) :test #'equal)))
                              :simple-calls t)))
 
 (defun to-normal-char (char &key context)
@@ -272,7 +290,7 @@
   (setf str (simplify-ngrams str
                              (if (eql context :kana)
                                  *dakuten-join*
-                                 (append *punctuation-marks* *dakuten-join*)))))
+                                 *normalize-marks*))))
 
 (defun split-by-regex (regex str)
   (remove-if (lambda (seg) (= (length seg) 0))

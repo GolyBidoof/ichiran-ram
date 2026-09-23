@@ -1212,9 +1212,14 @@
                            :allow-first t)
 
 (defun apply-segfilters (seg-left seg-right)
+  "Filter the single (SEG-LEFT . SEG-RIGHT) split through *segfilter-list*.
+   Stops as soon as no split survives: the remaining filters can only ever be
+   given NIL, so running them is pure overhead, and several of the 16 reject
+   outright (segfilter-badend is (constantly nil))."
   (loop with splits = (list (list seg-left seg-right))
      for segfilter in *segfilter-list*
-     do (setf splits
-              (loop for (seg-left seg-right) in splits
-                 nconc (funcall segfilter seg-left seg-right)))
+     do (when (null splits) (return splits))
+        (setf splits
+              (loop for (l r) in splits
+                 nconc (funcall segfilter l r)))
      finally (return splits)))
