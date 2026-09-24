@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The README was cut from 532 lines to 322 and reordered around doing the
+  thing.** "Get it running" is now the first section, three numbered steps:
+  install ichiran (Docker or local SBCL), run `./scripts/ram-setup.sh`, then use
+  the same commands as always. The manual contents list is gone, since GitHub
+  renders its own; the benchmark prose was cut to the numbers and the caveat that
+  the comparison against upstream is deliberately checkable; and the harness
+  inventory, the document index and the raw run logs were folded into one "Going
+  deeper" section. Nothing was deleted that a reader needs, and no number moved.
 - **The README opening was rewritten in a plainer voice.** It now names ichiran as
   the analyzer behind ichi.moe, explains the cost as one habit rather than as an
   architecture, and makes the case in claims with the receipts next to them: the
