@@ -3,12 +3,10 @@
 **The entire Japanese dictionary in RAM: about 40 times faster, and no database
 running.**
 
+[![Speed](https://img.shields.io/badge/speed-about%2040x-brightgreen)](#the-numbers)
 [![Output](https://img.shields.io/badge/output-byte--identical-brightgreen)](#verification)
 [![Tests](https://img.shields.io/badge/tests-820%20assertions%2C%200%20failed-brightgreen)](#verification)
-[![Per line](https://img.shields.io/badge/per%20line-51.7ms%20to%201.27ms-brightgreen)](#the-numbers)
-[![Queries](https://img.shields.io/badge/SQL%20queries%20per%20line-17.12%20to%200.28-brightgreen)](#the-numbers)
 [![Database](https://img.shields.io/badge/database-not%20required-blue)](#the-numbers)
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 Ichiran is the Japanese tokenizer and morphological analyzer behind
 [ichi.moe](http://ichi.moe). Hand it unbroken Japanese and it decides where the
@@ -22,6 +20,16 @@ This fork moves the dictionary into memory. The same JMdict tables load into
 8.1GB of RAM once, and the database stops mattering. Bake it and you get a single
 469MB file that answers in about a second with nothing else running. Output is
 byte-identical to the database path, and three gates check that on every commit.
+
+**The fast path is one command.** If ichiran already runs on your machine:
+
+```sh
+./scripts/ram-setup.sh
+```
+
+That writes the snapshots and bakes the core. From then on every command you
+already use answers from RAM, with no flags, no configuration and no database.
+Starting from nothing? The three steps below take you there.
 
 ## Get it running
 
@@ -64,6 +72,9 @@ quicklisp state inside the checkout, finds SBCL on your `PATH` (or take
 
 ### 2. Turn on the fast path
 
+This is the point of the fork. One command, and everything after it serves from
+RAM:
+
 ```sh
 ./scripts/ram-setup.sh
 ```
@@ -80,7 +91,7 @@ refuses and tells you to use `PRESET=lite`. Inside the docker container, run it
 from the repo directory there and it finds the `pg` service by itself; give
 Docker Desktop at least 8GB first.
 
-### 3. Use it
+### 3. Use it, from RAM
 
 ```sh
 ./scripts/ichiran-cli -i "一覧は最高だぞ"       # the same CLI, now from the core
