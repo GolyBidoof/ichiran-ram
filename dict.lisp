@@ -2005,9 +2005,17 @@
            ;; The body is pure (it builds a segmentation or a JSON tree), so
            ;; running it twice is safe. Porting those paths removes the
            ;; fallback; until then this keeps the speed and the output.
-           (if (search "No database connection" (princ-to-string e))
-               (with-connection *connection* ,@body)
-               (error e))))
+           ;;
+           ;; With no database to fall back to, re-signal instead: the retry
+           ;; would open a connection with the default spec and die with a
+           ;; socket error raised from somewhere deep, which hides the real
+           ;; error and makes a missing RAM path look like a networking
+           ;; problem.
+           (if *no-database*
+               (error e)
+               (if (search "No database connection" (princ-to-string e))
+                   (with-connection *connection* ,@body)
+                   (error e)))))
        (with-connection *connection* ,@body)))
 
 (defun word-info-from-text (text)

@@ -1,7 +1,7 @@
 # Ichiran RAM
 
-**The entire Japanese dictionary in RAM: about 40 times faster, and no database
-running.**
+The whole JMdict dictionary in memory. Same output as upstream, no PostgreSQL,
+about 40 times faster on real text.
 
 [![Speed](https://img.shields.io/badge/speed-about%2040x-brightgreen)](#the-numbers)
 [![Output](https://img.shields.io/badge/output-byte--identical-brightgreen)](#verification)
@@ -9,143 +9,99 @@ running.**
 [![Database](https://img.shields.io/badge/database-not%20required-blue)](#the-numbers)
 
 Ichiran is the Japanese tokenizer and morphological analyzer behind
-[ichi.moe](http://ichi.moe). Hand it unbroken Japanese and it decides where the
-words are, then gives you the reading, the furigana, the romaji and the JMdict
-gloss for every piece. It has one expensive habit: every word it looks at becomes
-questions for PostgreSQL, asked one after another while you wait. A sentence
-costs thousands of queries, a subtitle file costs millions, and that is what
-makes ichiran feel slow.
+[ichi.moe](http://ichi.moe). Give it unbroken Japanese and it decides where the
+words are, then returns the reading, the furigana, the romaji and the JMdict gloss
+for each piece. Upstream asks PostgreSQL about every word, one query after
+another, so a sentence costs thousands of queries and a subtitle file costs
+millions. That is where the time goes.
 
-This fork moves the dictionary into memory. The same JMdict tables load into
-8.1GB of RAM once, and the database stops mattering. Bake it and you get a single
-469MB file that answers in about a second with nothing else running. Output is
-byte-identical to the database path, and three gates check that on every commit.
-
-**The fast path is one command.** If ichiran already runs on your machine:
-
-```sh
-./scripts/ram-setup.sh
-```
-
-That writes the snapshots and bakes the core, reading your database one last
-time. Every command you already use then answers from RAM, with no flags and no
-configuration. Starting from nothing? The three steps below take you there.
-
-## Get it running
-
-Three steps: get the pieces in place, run one setup command, then everything runs
-from RAM. PostgreSQL appears once below, as somewhere to read the dictionary out
-of. Nothing here leaves you serving from it.
-
-### 1. Get the pieces in place
-
-**No database, no build: download the dictionary.** The published core is a
-469MB file that answers with no database running. Grab it and go:
+This fork loads the same tables into 8.1GB of memory once, after which the
+database is not involved. It is the same ichiran, the same commands and the same
+output, byte for byte, checked by three gates on every commit.
 
 ```sh
 git clone https://github.com/GolyBidoof/ichiran-ram.git
 cd ichiran-ram
+./scripts/ram-setup.sh
+```
+
+One command, and it needs no database. It fetches or builds the dictionary, bakes
+a 469MB serving core, and checks the result by romanizing a sentence. From then on
+every ichiran command answers from RAM, with no flags, no environment variables
+and nothing else running. The rest of this file covers what that command does,
+what the numbers are, and how the output is verified.
+
+## Setup
+
+The command above does all of this. It installs quicklisp if you do not have it,
+downloads the published dictionary
+(1.9GB, SHA256 checked), bakes a serving core, and smoke-tests it by romanizing a
+sentence. Expect a few minutes the first time; running it again reuses everything
+and takes seconds, and `FORCE=1` rebuilds from scratch.
+
+Then, from RAM, with nothing else running:
+
+```sh
+./scripts/ichiran-cli -i "一覧は最高だぞ"             # one sentence
+echo "日本語のテキスト" | ./scripts/serve-system.sh   # one text per line, in parallel
+./scripts/serve-system.sh < mytext.txt > romaji.txt   # the same, from a file
+WORKERS=4 ./scripts/serve-system.sh                   # default is one worker per core
+```
+
+**Requirements: SBCL and curl.** About 16GB of RAM to bake the core and 8GB to
+serve, 1.9GB of disk for the dictionary and 469MB more for the core. Nothing above
+needs PostgreSQL. `./scripts/serve-snapshot.sh` serves straight from the snapshots
+with no core at all, booting in about 8.5s instead of about 1.3s.
+
+If the machine cannot hold the bake, take the prebuilt core:
+
+```sh
 ./scripts/fetch-dictionary.sh --core
 ```
 
-That checks a SHA256 sum and unpacks into `local-env/`. Skip to step 3. The core
-is an SBCL image, so it only loads on the platform it was built for, which is
-macOS arm64 with SBCL 2.6.8; on anything else, use one of the two builds below.
-
-**Docker, nothing to install.** Downloads a prepared JMdictDB dump, so you never
-build the dictionary yourself.
-
-```sh
-git clone https://github.com/GolyBidoof/ichiran-ram.git
-cd ichiran-ram
-docker compose build          # a few minutes the first time
-docker compose up             # restores a 4.7GB database once, then idles
-```
-
-The first `up` is the slow one, and it is done when it prints "All set, awaiting
-commands".
-
-**Local SBCL and PostgreSQL.** Install SBCL, [quicklisp](https://www.quicklisp.org/beta/)
-and PostgreSQL 16, then:
-
-```sh
-ln -s "$PWD" "$HOME/quicklisp/local-projects/ichiran"
-cp settings.lisp.template settings.lisp   # database connection, used to build
-```
-
-Create the database from the [upstream dump](https://github.com/tshatrov/ichiran/releases)
-(quick) or with `(ichiran/maintenance:full-init)` (hours), then run
-`(ichiran/dict:init-suffixes t)`, which builds the suffix cache and must not be
-skipped. The scripts in `scripts/` go through `scripts/sbcl-wrapped`, which keeps
-all SBCL and quicklisp state inside the checkout, finds SBCL on your `PATH` (or
-take `SBCL=/path/to/sbcl`), and looks for quicklisp in `local-env/quicklisp` first.
-
-### 2. Turn on the fast path
-
-This is the point of the fork. One command, and everything after it serves from
-RAM:
-
-```sh
-./scripts/ram-setup.sh
-```
-
-Wait for it to finish. It checks SBCL, quicklisp and your database, writes the
-dictionary snapshots (1.6GB), bakes a serving core (469MB), and smoke-tests the
-result by romanizing a sentence from the core. Expect a few minutes. Running it
-again reuses what is there and takes seconds, and `FORCE=1` rebuilds from scratch.
-
-On a 16GB machine the full dictionary needs about 16GB of memory, so the setup
-refuses and tells you to use `PRESET=lite`.
-
-**From here, PostgreSQL is optional, and the core does not need it at all.** With
-the server stopped, the core still answers, its ready line reports `"db":false`,
-and the output is byte-identical to the run with the database up: measured over
-the 382-line golden corpus and a 7,278-line third-party sample. The snapshot path
-is the one that keeps a connection, for the few lookups the RAM layer does not
-cover yet, so bake the core if you want to stop the server entirely.
-
-Building them is the part that still reads PostgreSQL, and only for three data
-sets that are not in the snapshot format yet: the is-arch flags, the restricted
-readings, and the counters. Everything else comes out of the dictionary tables.
-
-In the docker container it is the same, in one command, and it finds the `pg`
-service by itself. Give Docker Desktop at least 8GB of memory first:
+An SBCL core only loads on the platform it was built for, and that one is macOS
+arm64 with SBCL 2.6.8. Anywhere else, fetch the portable snapshots and bake your
+own; that needs no database either. Inside docker the same setup is one command,
+and it finds the `pg` service by itself. Give Docker Desktop 8GB of memory first:
 
 ```sh
 docker exec -it ichiran-main-1 bash -lc \
   'cd /root/quicklisp/local-projects/ichiran && ./scripts/ram-setup.sh'
 ```
 
-### 3. Use it, from RAM
+The CLI prints which backend it chose on stderr, and `ICHIRAN_BACKEND=ram` pins it
+to RAM. Inside the container `docker exec -it ichiran-main-1 ichiran-cli -i "text"`
+answers from the core the same way, `test-suite` runs the test suite, and
+`ichiran-sbcl` opens a Lisp REPL.
+
+### If you want your own dictionary instead
+
+This is the only part of the project that reads PostgreSQL. The published
+dictionary is a JMdict snapshot, so building your own from a different one means
+giving the build a database. Either let Docker fetch a prepared JMdictDB dump:
 
 ```sh
-./scripts/ichiran-cli -i "一覧は最高だぞ"       # the same CLI, now from the core
-./scripts/serve-system.sh                     # one text per line, parallel, no DB
+docker compose build          # a few minutes the first time
+docker compose up             # restores a 4.7GB database once, then idles
 ```
 
-Nothing else changes. No flags, no environment variables, no arguments. Inside
-the container, `docker exec -it ichiran-main-1 ichiran-cli -i "text"` answers from
-the core the same way, `test-suite` runs the test suite, and `ichiran-sbcl` opens
-a Lisp REPL. The CLI prints which backend it chose on stderr, and
-`ICHIRAN_BACKEND=ram` pins it to RAM.
-
-If you would rather not bake a core at all, `./scripts/build-snapshot.sh` plus
-`./scripts/serve-snapshot.sh` gives the same per-line speed and boots in about
-8.5 seconds instead of about 1.3.
-
-The servers read one text per line on stdin and write one result per line on
-stdout, in the same order:
+The first `up` is the slow one, and it is done when it prints "All set, awaiting
+commands". Or install PostgreSQL 16 yourself and point the build at it:
 
 ```sh
-echo "一覧は最高だぞ" | ./scripts/serve-system.sh
-./scripts/serve-system.sh < mytext.txt > romaji.txt
-WORKERS=4 ./scripts/serve-system.sh      # default is one worker per core
-SERIAL=1 ./scripts/serve-system.sh       # single thread, for debugging
+ln -s "$PWD" "$HOME/quicklisp/local-projects/ichiran"
+cp settings.lisp.template settings.lisp   # the connection the build reads
 ```
 
-The server prints a line containing `{"ready":true}` when it is warm. Ignore
-everything before it: SBCL prints its banner to stdout and it cannot be suppressed
-when a core image is used.
+Create the database from the [upstream dump](https://github.com/tshatrov/ichiran/releases)
+(quick) or with `(ichiran/maintenance:full-init)` (hours), then run
+`(ichiran/dict:init-suffixes t)`, which builds the suffix cache and must not be
+skipped: the bake reads it. Then `./scripts/ram-setup.sh` writes the snapshots and
+the core from that database, and it is not needed again afterwards.
+
+Every script goes through `scripts/sbcl-wrapped`, which keeps SBCL and quicklisp
+state inside the checkout, finds SBCL on your `PATH` (or take `SBCL=/path/to/sbcl`),
+and looks for quicklisp in `local-env/quicklisp` first.
 
 ## What you get
 
@@ -307,14 +263,17 @@ fixed baseline file rather than running the database twice.
 
 ## Requirements
 
+**Software: SBCL and curl.** The setup installs quicklisp for you. PostgreSQL 16
+is needed only to build the dictionary from a database of your own, and Docker
+only for the download-and-restore route to one.
+
 | | Minimum | Comfortable |
 | --- | --- | --- |
-| Database path only | 4GB RAM | 8GB |
-| RAM snapshot | 10GB RAM | 16GB |
 | Baked full core | 16GB RAM | 24GB |
-| Disk, dictionary | 4.7GB | 5GB |
-| Disk, snapshot | 1.6GB | |
+| RAM snapshot | 10GB RAM | 16GB |
+| Disk, dictionary | 1.7GB | 1.9GB while downloading |
 | Disk, core | 469MB | |
+| Building your own dictionary | 4GB RAM | 8GB |
 
 Serving from RAM holds about 8.1GB of dictionary in the heap, so 16GB is the
 practical floor for the full dictionary, and `save-lisp-and-die` needs roughly

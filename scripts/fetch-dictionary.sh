@@ -15,13 +15,13 @@
 # download resumes where it stopped.
 #
 # Environment:
-#   ICHIRAN_RELEASE=tag          release to read from (default dict-v1)
+#   ICHIRAN_RELEASE=tag          release to read from (default dict-v2)
 #   ICHIRAN_RELEASE_URL=base     override the whole download base
 set -e
 
 cd "$(dirname "$0")/.." || exit 1
 
-TAG="${ICHIRAN_RELEASE:-dict-v1}"
+TAG="${ICHIRAN_RELEASE:-dict-v2}"
 BASE="${ICHIRAN_RELEASE_URL:-https://github.com/GolyBidoof/ichiran-ram/releases/download/$TAG}"
 
 want_core=0
@@ -34,7 +34,7 @@ for arg in "$@"; do
   esac
 done
 
-assets="ichiran-int.snap.gz ichiran-sense.snap.gz"
+assets="ichiran-int.snap.gz ichiran-sense.snap.gz ichiran-bake.snap.gz"
 [ "$want_core" = 1 ] && assets="$assets ichiran-serving.core.gz"
 
 mkdir -p local-env
@@ -54,7 +54,17 @@ for asset in $assets; do
   fi
   if [ ! -f "$asset" ]; then
     echo "  downloading $asset"
-    curl -fL -C - --progress-bar -O "$BASE/$asset"
+    if ! curl -fL -C - --progress-bar -O "$BASE/$asset"; then
+      if [ "$asset" = "ichiran-bake.snap.gz" ]; then
+        # Releases before the bake extras exist do not carry it. Without it the
+        # snapshots still work, they just need a database at boot.
+        rm -f "$asset"
+        echo "  $asset is not in this release (only a database-free build needs it)"
+        continue
+      fi
+      echo "  could not download $asset" >&2
+      exit 1
+    fi
   else
     echo "  $asset already downloaded, resuming if incomplete"
     curl -fL -C - -s -O "$BASE/$asset" || true
@@ -77,7 +87,7 @@ for asset in $assets; do
 done
 
 echo "== done"
-for f in ichiran-int.snap ichiran-sense.snap ichiran-serving.core; do
+for f in ichiran-int.snap ichiran-sense.snap ichiran-bake.snap ichiran-serving.core; do
   [ -f "$f" ] && echo "  local-env/$f  $(LC_ALL=C du -h "$f" | cut -f1)"
 done
 cat <<'EOF'

@@ -10,6 +10,15 @@
 ;;
 ;;     export ICHIRAN_CONNECTION='("jmdict" "postgres" "" "localhost" :use-ssl :yes)'
 ;;
+(defvar *no-database* nil
+  "T when this image has no database to talk to and must not try.
+   Browsing and analysis are covered by the RAM dictionary, so a RAM-only
+   install is a supported state rather than a broken one. WITH-DB and DEFCACHE
+   skip their eager connect while this is bound, which is what lets a fully
+   baked core, and a snapshot load with the bake extras, run with no server
+   anywhere: the RAM paths are taken, the SQL paths are the only things that
+   would need a socket, and nothing calls them.")
+
 (defvar *connection-env-var* "ICHIRAN_CONNECTION" "dynamic connection setting, an environment variable that contains the value for *connection*")
 (defvar *is-dynamic-connection* nil "set to true when loading connection from environment variable, disables keep-connection")
 
@@ -47,22 +56,38 @@
 
 (defmacro with-db (dbid &body body)
   (alexandria:with-gensyms (pv-pairs var vars val vals iv key exists)
-    `(let* ((*connection* (get-spec ,dbid))
-            (,pv-pairs (when ,dbid
-                         (loop for (,var . ,iv) in *conn-vars*
-                            for ,key = (cons ,var *connection*)
-                            for (,val ,exists) = (multiple-value-list (gethash ,key *conn-var-cache*))
-                            collect ,var into ,vars
-                            if ,exists collect ,val into ,vals
-                            else collect ,iv into ,vals
-                            finally (return (cons ,vars ,vals))))))
-       (progv (car ,pv-pairs) (cdr ,pv-pairs)
-         (unwind-protect
-              (with-connection *connection*
-                ,@body)
-           (loop for ,var in (car ,pv-pairs)
-              for ,key = (cons ,var *connection*)
-              do (setf (gethash ,key *conn-var-cache*) (symbol-value ,var))))))))
+    ;; With no database around, skip the connect entirely instead of failing on
+    ;; the way in. Anything inside that really needs SQL fails at its own query
+    ;; with a clearer error, and everything that has a RAM path never gets that
+    ;; far: see *NO-DATABASE*.
+    `(if *no-database*
+         (progn ,@body)
+         (let* ((*connection* (get-spec ,dbid))
+                (,pv-pairs (when ,dbid
+                             (loop for (,var . ,iv) in *conn-vars*
+                                for ,key = (cons ,var *connection*)
+                                for (,val ,exists) = (multiple-value-list (gethash ,key *conn-var-cache*))
+                                collect ,var into ,vars
+                                if ,exists collect ,val into ,vals
+                                else collect ,iv into ,vals
+                                finally (return (cons ,vars ,vals))))))
+           (progv (car ,pv-pairs) (cdr ,pv-pairs)
+             (unwind-protect
+                  (with-connection *connection*
+                    ,@body)
+               (loop for ,var in (car ,pv-pairs)
+                  for ,key = (cons ,var *connection*)
+                  do (setf (gethash ,key *conn-var-cache*) (symbol-value ,var)))))))))
+
+(defmacro with-db-connection (&body body)
+  "Run BODY with a connection, unless there is no database to talk to.
+   For the few paths that have a RAM alternative: WITH-CONNECTION asks the
+   server first and dies on the way in if there is none, which hides the part
+   of the work that never needed it. See *NO-DATABASE*."
+  `(if *no-database*
+       (progn ,@body)
+       (with-connection *connection*
+         ,@body)))
 
 (defun switch-conn-vars (dbid)
   (setf *connection* (get-spec dbid))
@@ -140,8 +165,13 @@
        (def-conn-var ,var nil)
        (make-instance 'cache :name ',name :var ',var)
        (defmethod init-cache ((,cache-var (eql ,name)))
-         (with-connection *connection*
-           ,@init-body)))))
+         ;; Same reason as WITH-DB: with no database, run the body without a
+         ;; connection. The caches that are only reachable when SQL is needed
+         ;; then fail at their query, and the RAM-backed ones answer from RAM.
+         (if *no-database*
+             (progn ,@init-body)
+             (with-connection *connection*
+               ,@init-body))))))
 
 (defun init-all-caches (&optional reset)
   (loop with fn = (if reset 'reset-cache 'ensure)

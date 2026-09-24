@@ -45,18 +45,31 @@ cat > "$BOOT_LISP" <<'EOF'
 (in-package :cl-user)
 
 (defun boot-and-serve ()
-  (let ((snap (uiop:getenv "SNAPSHOT")))
-    (ichiran/conn:with-db nil
-      (ichiran/memdict-compact:memdict-load-int :snapshot snap)
-      (if (probe-file "local-env/ichiran-sense.snap")
-          (ichiran/memdict-compact:memdict-load-sense-snapshot
-           "local-env/ichiran-sense.snap" :int-snapshot snap)
-          (ichiran/memdict-compact:memdict-load
-           :chunk 200000 :tables '("sense" "gloss" "sense_prop")))
-      (setf ichiran/dict::*memdict-p* t)
-      (ichiran/serve-parallel:warm-caches)
-      (setf ichiran/serve-parallel::*db-available*
-            (ichiran/serve-parallel:probe-db)))
+  (let* ((snap (uiop:getenv "SNAPSHOT"))
+         (extras (or (uiop:getenv "ICHIRAN_BAKE_SNAP")
+                     "local-env/ichiran-bake.snap"))
+         ;; The three sets that are not in the snapshot format are in the extras
+         ;; file. With it here this boot needs no database at all, so it does not
+         ;; open a socket even to find out whether one exists.
+         (dbless (and (probe-file extras) (fboundp 'ichiran/serve-parallel:load-bake-extras))))
+    (let ((ichiran/conn::*no-database* dbless))
+      (ichiran/conn:with-db nil
+        (ichiran/memdict-compact:memdict-load-int :snapshot snap)
+        (if (probe-file "local-env/ichiran-sense.snap")
+            (ichiran/memdict-compact:memdict-load-sense-snapshot
+             "local-env/ichiran-sense.snap" :int-snapshot snap)
+            (ichiran/memdict-compact:memdict-load
+             :chunk 200000 :tables '("sense" "gloss" "sense_prop")))
+        (when dbless
+          (ichiran/serve-parallel:load-bake-extras extras))
+        (setf ichiran/dict::*memdict-p* t)
+        (ichiran/serve-parallel:warm-caches)
+        (setf ichiran/serve-parallel::*db-available*
+              (ichiran/serve-parallel:probe-db))))
+    ;; The load went fully RAM, so the counters cache and the memo tables take
+    ;; their RAM paths for the rest of the process rather than probing per lookup.
+    (when (and dbless (not ichiran/serve-parallel::*db-available*))
+      (setf ichiran/conn::*no-database* t))
     ;; Only the serial path announces readiness here. serve-stream prints its
     ;; own ready line on the parallel path, and two of them would desynchronize
     ;; a client that treats the first as the signal to start sending.
@@ -89,5 +102,7 @@ SNAPSHOT="$SNAPSHOT" scripts/sbcl-wrapped --dynamic-space-size 8192 \
   --load src/memdict-int.lisp \
   --load src/memdict-compact-shims.lisp \
   --load src/int-snapshot.lisp \
+  --load src/sense-snapshot.lisp \
   --load src/serve-parallel.lisp \
+  --load src/bake-extras.lisp \
   --load "$BOOT_LISP"

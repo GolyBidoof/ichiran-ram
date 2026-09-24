@@ -31,6 +31,10 @@ PRESET="${PRESET:-full-ram}"
 SNAP_OUT="${SNAP_OUT:-local-env/ichiran-int.snap}"
 SENSE_OUT="${SENSE_OUT:-local-env/ichiran-sense.snap}"
 CORE_OUT="${CORE_OUT:-local-env/ichiran-serving.core}"
+# The three sets that are not in the snapshot format: archaic seqs, seqs with
+# no conjugation data, and the restricted readings. With this alongside the two
+# snapshots, a bake needs no database.
+EXTRAS_OUT="${EXTRAS_OUT:-local-env/ichiran-bake.snap}"
 DB_HOST="${ICHIRAN_DB_HOST:-localhost}"
 DB_USER="${ICHIRAN_DB_USER:-jmdict}"
 DB_PASS="${ICHIRAN_DB_PASSWORD:-password}"
@@ -63,6 +67,15 @@ step "checking the environment"
 if [ ! -x scripts/sbcl-wrapped ]; then
   die "scripts/sbcl-wrapped is missing or not executable"
 fi
+
+# Quicklisp is the one dependency beyond SBCL. Install a workspace copy rather
+# than telling the user to go and do it.
+if [ ! -f local-env/quicklisp/setup.lisp ] && [ ! -f "$HOME/quicklisp/setup.lisp" ]; then
+  say "  no quicklisp yet: installing a workspace copy (one time, small download)"
+  ./scripts/bootstrap-quicklisp.sh ||     die "could not install quicklisp. The output above says why; see
+  scripts/bootstrap-quicklisp.sh, or install it yourself at ~/quicklisp."
+  say "  quicklisp installed"
+fi
 if ! scripts/sbcl-wrapped --non-interactive \
        --eval '(format t "SETUP_SBCL_OK~%")' 2>/dev/null | grep -q "SETUP_SBCL_OK"; then
   die "SBCL or quicklisp is not usable. Run this to see the details:
@@ -76,8 +89,28 @@ db_reachable() {
     -d "$DB_NAME" -tAc 'select 1' >/dev/null 2>&1
 }
 
+# Where the dictionary comes from, in order: what is already on disk, the
+# published artifacts, then a database. The first two need no database at all,
+# which is what makes a fresh install a single command.
+HAVE_SNAPSHOTS=0
+if [ -f "$SNAP_OUT" ] && [ -f "$SENSE_OUT" ] && [ -f "$EXTRAS_OUT" ]; then
+  HAVE_SNAPSHOTS=1
+fi
+if [ "$HAVE_SNAPSHOTS" != 1 ] && [ "${NO_FETCH:-}" != "1" ]; then
+  say "  no dictionary yet: fetching the published one (the big download)"
+  if ./scripts/fetch-dictionary.sh; then
+    if [ -f "$SNAP_OUT" ] && [ -f "$SENSE_OUT" ] && [ -f "$EXTRAS_OUT" ]; then
+      HAVE_SNAPSHOTS=1
+    fi
+  else
+    say "  the download did not complete: falling back to building from a database"
+  fi
+fi
+
 if [ "${SKIP_DB_CHECK:-}" != "1" ]; then
-  if [ "$CORE_READY" = 1 ]; then
+  if [ "$HAVE_SNAPSHOTS" = 1 ]; then
+    say "  snapshots and bake extras present, so no database is needed at all"
+  elif [ "$CORE_READY" = 1 ]; then
     say "  core already built at $CORE_OUT, so no database is needed for this run"
   elif command -v psql >/dev/null 2>&1; then
     if db_reachable "$DB_HOST"; then
@@ -89,10 +122,15 @@ if [ "${SKIP_DB_CHECK:-}" != "1" ]; then
       say "  database $DB_NAME on pg: ok (docker service name)"
     else
       die "cannot reach the database $DB_NAME on $DB_HOST as $DB_USER.
-  The snapshot is built from it, so a live database is required for this step.
-  Set ICHIRAN_DB_NAME, ICHIRAN_DB_USER, ICHIRAN_DB_PASSWORD and ICHIRAN_DB_HOST,
-  start PostgreSQL, or pass SKIP_DB_CHECK=1 to try anyway.
-  In the docker container the host is: ICHIRAN_DB_HOST=pg"
+  There is no snapshot on disk, so the dictionary has to be built from a
+  database. Either fetch the published one, which needs no database:
+
+    ./scripts/fetch-dictionary.sh
+
+  or point these at a database and run again:
+  ICHIRAN_DB_NAME, ICHIRAN_DB_USER, ICHIRAN_DB_PASSWORD, ICHIRAN_DB_HOST.
+  In the docker container the host is: ICHIRAN_DB_HOST=pg.
+  Set SKIP_DB_CHECK=1 to carry on anyway."
     fi
   else
     say "  psql not found, skipping the database check"
@@ -107,7 +145,9 @@ export ICHIRAN_DB_PASSWORD="$DB_PASS" ICHIRAN_DB_HOST="$DB_HOST"
 RAM_GB="$(total_ram_gb)"
 if [ "$PRESET" = "full-ram" ] && [ "$RAM_GB" != "0" ] && [ "$RAM_GB" -lt 14 ] 2>/dev/null; then
   die "the full dictionary needs about 16GB of RAM and this machine reports ${RAM_GB}GB.
-  Re-run with a smaller dictionary:   PRESET=lite ./scripts/ram-setup.sh"
+  A smaller machine can use the prebuilt core instead, which needs no bake:
+    ./scripts/fetch-dictionary.sh --core
+  or a smaller dictionary, which does need a database:   PRESET=lite ./scripts/ram-setup.sh"
 fi
 say "  preset: $PRESET${RAM_GB:+ (${RAM_GB}GB of RAM detected)}"
 
@@ -115,13 +155,13 @@ say "  preset: $PRESET${RAM_GB:+ (${RAM_GB}GB of RAM detected)}"
 step "building the dictionary snapshot"
 if [ "${SKIP_SNAPSHOT:-}" = "1" ]; then
   say "  skipped (SKIP_SNAPSHOT=1)"
-elif [ -f "$SNAP_OUT" ] && [ -f "$SENSE_OUT" ] && [ "${FORCE:-}" != "1" ]; then
-  say "  reusing $SNAP_OUT and $SENSE_OUT (FORCE=1 to rebuild)"
+elif [ -f "$SNAP_OUT" ] && [ -f "$SENSE_OUT" ] && [ -f "$EXTRAS_OUT" ] && [ "${FORCE:-}" != "1" ]; then
+  say "  reusing $SNAP_OUT, $SENSE_OUT and $EXTRAS_OUT (FORCE=1 to rebuild)"
 else
   say "  reading the dictionary from PostgreSQL, this takes a few minutes"
-  OUT="$SNAP_OUT" SENSE_OUT="$SENSE_OUT" ./scripts/build-snapshot.sh || \
+  OUT="$SNAP_OUT" SENSE_OUT="$SENSE_OUT" EXTRAS_OUT="$EXTRAS_OUT" ./scripts/build-snapshot.sh || \
     die "the snapshot build failed, see the output above"
-  say "  wrote $SNAP_OUT and $SENSE_OUT"
+  say "  wrote $SNAP_OUT, $SENSE_OUT and $EXTRAS_OUT"
 fi
 
 # --------------------------------------------------------------------- 3. core
@@ -132,6 +172,11 @@ elif [ -f "$CORE_OUT" ] && [ "${FORCE:-}" != "1" ]; then
   say "  reusing $CORE_OUT (FORCE=1 to rebuild)"
 else
   say "  this is the long step, a few minutes"
+  if [ "$HAVE_SNAPSHOTS" = 1 ] && [ "$PRESET" != "full-ram" ]; then
+    say "  note: the $PRESET preset reads the dictionary tables from PostgreSQL."
+    say "  The default full-ram preset is the database-free one; a machine that"
+    say "  cannot hold it can fetch the prebuilt core: fetch-dictionary.sh --core"
+  fi
   PRESET="$PRESET" SYSTEM=1 ./scripts/build-image.sh --out "$CORE_OUT" || \
     die "the core build failed, see the output above"
   say "  wrote $CORE_OUT"
@@ -163,8 +208,9 @@ say "  {\"ready\":true,...,\"db\":false}; see Verification in the README."
 
 # --------------------------------------------------------------------- summary
 step "done"
-say "  core:     $CORE_OUT ($(LC_ALL=C du -h "$CORE_OUT" | cut -f1))"
-[ -f "$SNAP_OUT" ] && say "  snapshot: $SNAP_OUT ($(LC_ALL=C du -h "$SNAP_OUT" | cut -f1))"
+say "  core:     $CORE_OUT ($(LC_ALL=C du -hL "$CORE_OUT" | cut -f1))"
+[ -f "$SNAP_OUT" ] && say "  snapshot: $SNAP_OUT ($(LC_ALL=C du -hL "$SNAP_OUT" | cut -f1))"
+[ -f "$EXTRAS_OUT" ] && say "  extras:   $EXTRAS_OUT ($(LC_ALL=C du -hL "$EXTRAS_OUT" | cut -f1))"
 say ""
 say "  The usual command now answers from the core, with no database:"
 say "    ./scripts/ichiran-cli -i \"一覧は最高だぞ\""

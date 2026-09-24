@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+- **Install is one command, and it never needs a database.** `ram-setup.sh`
+  installs quicklisp into the checkout when it is missing, fetches the published
+  dictionary (snapshots plus the 2.3MB bake extras) when there is nothing on disk,
+  and only asks for a database if that download fails. Verified from a clean
+  checkout with PostgreSQL stopped: one command, checksums checked, a sentence
+  answered, no server anywhere. `scripts/bootstrap-quicklisp.sh` is new,
+  `fetch-dictionary.sh` now asks for the extras, and `ram-setup.sh` no longer
+  demands a database just because a core has not been baked yet.
+- **The build needs no database either, so PostgreSQL is needed once, to write
+  the snapshots.** `build-image.sh` reads the integer and sense layers from the
+  snapshots and the three derived sets from the new 2.3MB
+  `local-env/ichiran-bake.snap` on the `full-ram` preset. A core baked with the
+  database stopped measures 466MB and answers byte-identically to the
+  database-built reference over the golden corpus, reporting `"db":false`.
+  `build-snapshot.sh` writes the extras, `ram-setup.sh` builds or reuses them,
+  and `fetch-dictionary.sh` asks for them while tolerating releases that predate
+  them. The other presets keep reading PostgreSQL, because the integer snapshot
+  holds all six integer tables and ignores `:tables`.
+- **`ram-parity.sh`, the primary gate, runs with no database.** It loads the
+  sense layer from its snapshot and the derived sets from the extras, so the gate
+  that proves output equality needs nothing to compare against beyond the
+  baseline file: `RAM_PARITY_OK` with PostgreSQL stopped, and it is the same
+  command that previously needed a live server for the sense layer.
+- **"No database" is now a state the code understands.** `with-db` and `defcache`
+  opened a connection eagerly, so a load failed on the way in whatever it was
+  doing, which is why no RAM path could ever have been database-free on its own.
+  `*no-database*` skips those connects and `with-db-connection` guards the paths
+  that have a RAM alternative. `with-dict-connection` no longer retries through a
+  socket when there is no socket to retry through: it re-signals, so a missing
+  RAM path reports itself instead of looking like a networking failure.
+- **The counters cache reads its input from RAM.** `counter-text-rows` follows
+  the pattern already used by `get-counter-ids`, `get-counter-stags` and
+  `get-kanji-kana-old`; nothing in the counter path needs a connection once the
+  text tables are resident.
 - **The dictionary is published, so the fast path needs no database and no
   build.** Release `dict-v1` carries the baked serving core (446MB compressed,
   macOS arm64 with SBCL 2.6.8), the integer snapshot (294MB compressed, from

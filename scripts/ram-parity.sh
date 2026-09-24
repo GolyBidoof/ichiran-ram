@@ -23,15 +23,30 @@ cat > /tmp/ichiran-ram-parity.lisp <<'EOF'
 (in-package :cl-user)
 
 (defun main ()
-  (let ((out (uiop:getenv "RAM_PARITY_OUT"))
-        (snap (uiop:getenv "RAM_PARITY_SNAP")))
-    ;; The integer layer plus the compact sense layer, exactly as the serving
-    ;; path loads them, so this exercises the real configuration.
-    (ichiran/conn:with-db nil
-      (ichiran/memdict-compact:memdict-load-int :snapshot snap)
-      (ichiran/memdict-compact:memdict-load
-       :chunk 200000 :tables '("sense" "gloss" "sense_prop"))
-      (setf ichiran/dict::*memdict-p* t))
+  (let* ((out (uiop:getenv "RAM_PARITY_OUT"))
+         (snap (uiop:getenv "RAM_PARITY_SNAP"))
+         (sense (or (uiop:getenv "RAM_PARITY_SENSE") "local-env/ichiran-sense.snap"))
+         (extras (or (uiop:getenv "ICHIRAN_BAKE_SNAP") "local-env/ichiran-bake.snap"))
+         ;; The integer layer, the compact sense layer, and the three sets the
+         ;; snapshot format does not carry, exactly as the serving path loads
+         ;; them. With the last two files present nothing here needs a database,
+         ;; so this gate does not open a socket either: it is the RAM path being
+         ;; tested, and a database on the side would only be able to hide a
+         ;; lookup that still reaches for one.
+         (dbless (and (probe-file sense) (probe-file extras) (fboundp 'ichiran/serve-parallel:load-bake-extras))))
+    (let ((ichiran/conn::*no-database* dbless))
+      (ichiran/conn:with-db nil
+        (ichiran/memdict-compact:memdict-load-int :snapshot snap)
+        (if (probe-file sense)
+            (ichiran/memdict-compact:memdict-load-sense-snapshot
+             sense :int-snapshot snap)
+            (ichiran/memdict-compact:memdict-load
+             :chunk 200000 :tables '("sense" "gloss" "sense_prop")))
+        (when dbless
+          (ichiran/serve-parallel:load-bake-extras extras))
+        (setf ichiran/dict::*memdict-p* t)))
+    (when dbless
+      (setf ichiran/conn::*no-database* t))
     ;; settle lazy caches, and wait out the suffix cache's background builder
     (ichiran:romanize "テスト")
     (ignore-errors (ichiran/dict::ensure-suffixes-ready))
@@ -63,6 +78,9 @@ scripts/sbcl-wrapped --dynamic-space-size 14336 --non-interactive \
   --load src/memdict-int.lisp \
   --load src/memdict-compact-shims.lisp \
   --load src/int-snapshot.lisp \
+  --load src/sense-snapshot.lisp \
+  --load src/serve-parallel.lisp \
+  --load src/bake-extras.lisp \
   --load /tmp/ichiran-ram-parity.lisp \
   --eval '(main)' 2>&1 | tail -3
 

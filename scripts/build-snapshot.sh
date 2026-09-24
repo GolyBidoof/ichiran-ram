@@ -17,6 +17,7 @@ if [ "$1" = "--out" ] && [ -n "$2" ]; then OUT="$2"; fi
 # of the integer layer, and keeping it separate means a dictionary rebuild does
 # not force a sense rebuild.
 SENSE_OUT="${SENSE_OUT:-local-env/ichiran-sense.snap}"
+EXTRAS_OUT="${EXTRAS_OUT:-local-env/ichiran-bake.snap}"
 
 SNAP_LISP="$(mktemp /tmp/build-snapshot.XXXXXXXX)" || exit 2
 trap 'rm -f "$SNAP_LISP"' EXIT INT TERM
@@ -26,6 +27,8 @@ cat > "$SNAP_LISP" <<EOF
 (load "src/memdict-int.lisp")
 (load "src/int-snapshot.lisp")
 (load "src/sense-snapshot.lisp")
+(load "src/serve-parallel.lisp")
+(load "src/bake-extras.lisp")
 (ichiran/conn:with-db nil
   (ichiran/memdict-compact:memdict-load-int :save-snapshot "$OUT")
   ;; sense, gloss and sense_prop: the last tables that still came from SQL on
@@ -33,9 +36,14 @@ cat > "$SNAP_LISP" <<EOF
   ;; database at all.
   (ichiran/memdict-compact:memdict-load
    :chunk 200000 :tables (list "sense" "gloss" "sense_prop"))
-  (ichiran/memdict-compact:memdict-save-sense-snapshot "$SENSE_OUT"))
+  (ichiran/memdict-compact:memdict-save-sense-snapshot "$SENSE_OUT")
+  ;; The three sets that are not resident tables: archaic seqs, seqs with no
+  ;; conjugation data, and the restricted readings. Written here, while the
+  ;; database is still around, so that nothing later has to read it.
+  (ichiran/serve-parallel:write-bake-extras "$EXTRAS_OUT"))
 (format t "SNAPSHOT_DONE -> $OUT~%")
 (format t "SENSE_SNAPSHOT_DONE -> $SENSE_OUT~%")
+(format t "BAKE_EXTRAS_DONE -> $EXTRAS_OUT~%")
 EOF
 
 echo "build-snapshot.sh: writing $OUT ..." >&2

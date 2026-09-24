@@ -26,7 +26,10 @@
   (:use #:cl)
   (:export #:serve-stream #:map-lines-parallel #:worker-count #:warm-caches
            #:romanize-safe #:probe-db #:*db-available*
-           #:load-dictionary #:*dict-baked*))
+           #:load-dictionary #:*dict-baked*
+           ;; The bake extras: the three sets the snapshot format does not
+           ;; carry. See src/bake-extras.lisp.
+           #:load-bake-extras #:write-bake-extras #:bake-extras-path))
 
 (in-package #:ichiran/serve-parallel)
 
@@ -128,7 +131,17 @@
    SENSE-SNAPSHOT when it exists, which is what lets the RAM path run with no
    database at all, and from PostgreSQL otherwise. Callers that have a baked
    core should not call this: check *DICT-BAKED* first."
-  (ichiran/conn:with-db nil
+  (let* ((extras (or (uiop:getenv "ICHIRAN_BAKE_SNAP")
+                     "local-env/ichiran-bake.snap"))
+         ;; All three artifacts present means this load needs no database at all,
+         ;; so it must not open a socket even when a server happens to be there.
+         ;; This is what makes a from-source build possible with no PostgreSQL.
+         (dbless (and (probe-file int-snapshot)
+                      (probe-file sense-snapshot)
+                      (probe-file extras)
+                      (fboundp 'load-bake-extras))))
+    (let ((ichiran/conn::*no-database* dbless))
+      (ichiran/conn:with-db nil
     (ichiran/memdict-compact:memdict-load-int :snapshot int-snapshot)
     (if (probe-file sense-snapshot)
         (progn
@@ -139,7 +152,19 @@
           (format t "~&load-dictionary: sense layer from PostgreSQL~%")
           (ichiran/memdict-compact:memdict-load
            :chunk 200000 :tables '("sense" "gloss" "sense_prop"))))
-    (load-restricted-readings)
+    ;; The three sets that are not in the snapshot format: archaic seqs, seqs
+    ;; with no conjugation data, and the restricted readings. The extras file
+    ;; carries all three, so this path needs no database. LOAD-RESTRICTED-READINGS
+    ;; is the SQL fallback for a checkout that has a database and no extras yet.
+    ;; The extra FBPOUNDP is only for someone loading this file without
+    ;; src/bake-extras.lisp: a sentence beats an undefined-function error.
+    (cond ((and (probe-file extras) (fboundp 'load-bake-extras))
+           (load-bake-extras extras))
+          (t
+           (unless (probe-file extras)
+             (format t "~&load-dictionary: no ~a, falling back to SQL for the ~
+                        restricted readings and the arch/conj caches~%" extras))
+           (load-restricted-readings)))
     (setf ichiran/dict::*memdict-p* t)
     ;; Size the flat gloss JSON caches from the dictionary just loaded, before
     ;; the warm pass, so the warm pass also fills them.
@@ -150,10 +175,16 @@
     ;; Probed, not asserted. On the snapshot path nothing above touched
     ;; PostgreSQL, so claiming T here would tell workers to open connections
     ;; for fallback paths without ever having checked that one can be opened.
-    (setf *db-available* (probe-db)))
+    (setf *db-available* (probe-db))))
+    ;; A server that was not there during the load stays not there for the rest
+    ;; of the process, so serving takes the RAM paths instead of discovering it
+    ;; once per lookup. *DB-AVAILABLE* was set by the probe above, inside the
+    ;; binding, so it says NIL here exactly when the load went fully RAM.
+    (when (and dbless (not *db-available*))
+      (setf ichiran/conn::*no-database* t))
   (ichiran:romanize "テスト")
   (sleep 2)
-  t)
+  t))
 
 (defun warm-caches ()
   "Force the one-time cache initializations in the main thread, so workers

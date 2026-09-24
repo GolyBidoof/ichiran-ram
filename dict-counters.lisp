@@ -335,15 +335,27 @@
     2833467 ;; 筒
     ))
 
+(defun counter-text-rows (table seqs)
+  "Every row of TABLE for SEQS, from RAM when that table is loaded.
+   Mirrors the RAM branches already in GET-COUNTER-IDS, GET-COUNTER-STAGS and
+   GET-KANJI-KANA-OLD (dict.lisp). The counters cache is a cache of closures, so
+   it cannot be snapshotted; its input can, and this is that input. Rows are
+   fresh copies, which the caller mutates."
+  (if (memdict-table-loaded-p table)
+      (loop for seq in seqs
+            append (memdict-call 'memdict-rows-by-seq table seq))
+      (select-dao (if (string-equal table "kanji_text") 'kanji-text 'kana-text)
+                  (:in 'seq (:set seqs)))))
+
 (defun get-counter-readings ()
-  (with-connection *connection*
+  (ichiran/conn::with-db-connection
     (let* ((hash (make-hash-table))
            (counter-ids (set-difference
                          (nconc (get-counter-ids) *extra-counter-ids*)
                          *skip-counter-ids*))
            (stags (get-counter-stags counter-ids))
-           (kanji-readings (select-dao 'kanji-text (:in 'seq (:set counter-ids))))
-           (kana-readings (select-dao 'kana-text (:in 'seq (:set counter-ids)))))
+           (kanji-readings (counter-text-rows "kanji_text" counter-ids))
+           (kana-readings (counter-text-rows "kana_text" counter-ids)))
       (loop for r in kanji-readings
          for val = (gethash (seq r) hash)
          for stagks = (gethash (seq r) (car stags))

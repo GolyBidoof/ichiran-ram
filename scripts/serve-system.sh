@@ -70,5 +70,6 @@ echo "serve-system.sh: serving from $CORE ..." >&2
 scripts/sbcl-wrapped --dynamic-space-size 8192 --core "$CORE" \
   --non-interactive \
   --load src/serve-parallel.lisp \
+  --load src/bake-extras.lisp \
   --load "$LOOP_LISP" \
   --eval '(ichiran/serve-system:main)'

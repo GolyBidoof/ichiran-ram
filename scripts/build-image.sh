@@ -81,16 +81,48 @@ if [ -n "$SYSTEM" ]; then
   # A trie is built below but nothing enabled it, so a core built with
   # TRIE_TABLES set carried a prefix index that trie-enabled-p always
   # rejected. Enable it only when a trie is actually being built.
+
+# A bake with no database at all. The integer layer and the sense layer come from
+# the snapshots instead of SQL, and the three derived sets that the snapshot
+# format does not carry come from the bake extras. Only the full-ram preset is
+# wired this way: the integer snapshot holds all six integer tables and ignores
+# :tables, and the sense snapshot holds exactly sense, gloss and sense_prop.
+# Anything else keeps reading PostgreSQL, because a partial load needs a source
+# the snapshots do not have.
+INT_SNAP="${ICHIRAN_INT_SNAP:-local-env/ichiran-int.snap}"
+SENSE_SNAP="${ICHIRAN_SENSE_SNAP:-local-env/ichiran-sense.snap}"
+EXTRAS_SNAP="${ICHIRAN_BAKE_SNAP:-local-env/ichiran-bake.snap}"
+DBLESS_BAKE=0
+if [ -n "$INT_TABLES" ] && [ -f "$INT_SNAP" ] && [ -f "$SENSE_SNAP" ] && [ -f "$EXTRAS_SNAP" ]; then
+  DBLESS_BAKE=1
+fi
+
+if [ "$DBLESS_BAKE" = 1 ]; then
+  echo "build-image.sh: no database needed (snapshots + bake extras present)" >&2
+  INT_SOURCE_LISP=":snapshot \"$INT_SNAP\""
+  SENSE_LOAD_LISP="(ichiran/memdict-compact:memdict-load-sense-snapshot \"$SENSE_SNAP\" :int-snapshot \"$INT_SNAP\")"
+  # Sets the no-database state first, then installs the derived sets, so the warm
+  # pass and the counters cache below both take their RAM paths.
+  DBLESS_PRE_LISP="(setf ichiran/conn::*no-database* t) (ichiran/serve-parallel:load-bake-extras \"$EXTRAS_SNAP\")"
+  RESTRICTED_LISP=""
+else
+  INT_SOURCE_LISP=":conn '(\"$DB_NAME\" \"$DB_USER\" \"$DB_PASS\" \"$DB_HOST\")"
+  SENSE_LOAD_LISP="(ichiran/memdict-compact:memdict-load :conn '(\"$DB_NAME\" \"$DB_USER\" \"$DB_PASS\" \"$DB_HOST\") :chunk 100000 :tables (list $TABLES))"
+  DBLESS_PRE_LISP=""
+fi
+
   # RESTRICTED_READINGS is fetched from PostgreSQL at build time and baked,
   # so a core can serve restricted senses with no connection. The spec is
   # assembled here because SYSTEM_TAIL is single-quoted and cannot
   # interpolate the DB_* shell variables itself.
-  RESTRICTED_LISP=" (ichiran/serve-parallel::load-restricted-readings :conn '(\"$DB_NAME\" \"$DB_USER\" \"$DB_PASS\" \"$DB_HOST\"))"
+  if [ "$DBLESS_BAKE" != 1 ]; then
+    RESTRICTED_LISP=" (ichiran/serve-parallel::load-restricted-readings :conn '(\"$DB_NAME\" \"$DB_USER\" \"$DB_PASS\" \"$DB_HOST\"))"
+  fi
   TRIE_ENABLE=""
   if [ -n "$TRIE_TABLES" ]; then
     TRIE_ENABLE=' (setf ichiran/dict::*trie-p* t)'
   fi
-  SYSTEM_TAIL='(load "src/memdict-compact-shims.lisp") (load "src/serve-parallel.lisp") (setf ichiran/dict::*memdict-p* t) (setf ichiran/serve-parallel::*dict-baked* t) (ichiran/dict::gloss-json-cache-init) (ichiran/serve-parallel:warm-caches) (ignore-errors (ichiran/conn::ensure :counters))'"$TRIE_ENABLE""$RESTRICTED_LISP"
+  SYSTEM_TAIL='(load "src/memdict-compact-shims.lisp") (load "src/serve-parallel.lisp") (load "src/bake-extras.lisp") '"$DBLESS_PRE_LISP"' (setf ichiran/dict::*memdict-p* t) (setf ichiran/serve-parallel::*dict-baked* t) (ichiran/dict::gloss-json-cache-init) (ichiran/serve-parallel:warm-caches) (ignore-errors (ichiran/conn::ensure :counters))'"$TRIE_ENABLE""$RESTRICTED_LISP"
 else
   SYSTEM_LISP='(format t "bare core (no analyzer baked in)~%")'
   SYSTEM_TAIL='(format t "no shims (bare core)~%")'
@@ -105,26 +137,29 @@ BUILD_LISP="$(mktemp /tmp/build-serving.XXXXXXXX)" || {
 }
 trap 'rm -f "$BUILD_LISP"' EXIT INT TERM
 
+
 cat > "$BUILD_LISP" <<EOF
 (ql:quickload :postmodern :silent t)
 $SYSTEM_LISP
 (load "src/memdict-compact.lisp")
 (load "src/memdict-int.lisp")
 (load "src/trie.lisp")
+;; The snapshot readers, after the compact layers whose packages they use. A
+;; database-free bake reads the integer and sense layers through these.
+(load "src/int-snapshot.lisp")
+(load "src/sense-snapshot.lisp")
 (in-package :cl-user)
 (format t "~%== building serving core: loading integer dict layer (bare)...~%")
 (when (plusp (length (list $INT_TABLES)))
   (multiple-value-bind (bytes sizes)
       (ichiran/memdict-compact:memdict-load-int
-       :conn '("$DB_NAME" "$DB_USER" "$DB_PASS" "$DB_HOST")
+       $INT_SOURCE_LISP
        :chunk 200000
        :tables (list $INT_TABLES))
     (declare (ignore sizes))
     (format t "integer layer: ~,1f MB~%" (/ bytes 1048576.0))))
 (format t "~%== loading compact dict layer (bare)...~%")
-(ichiran/memdict-compact:memdict-load :conn '("$DB_NAME" "$DB_USER" "$DB_PASS" "$DB_HOST")
-                                      :chunk 100000
-                                      :tables (list $TABLES))
+$SENSE_LOAD_LISP
 (format t "dict loaded. stats: ~a~%" (ichiran/memdict-compact:memdict-stats))
 ;; Optional baked trie (TRIE_TABLES='"kana_text"' etc.): prefix index over the
 ;; RAM text keys so per-sentence seeding skips non-dict windows with no DB.
