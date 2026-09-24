@@ -27,15 +27,17 @@ byte-identical to the database path, and three gates check that on every commit.
 ./scripts/ram-setup.sh
 ```
 
-That writes the snapshots and bakes the core. From then on every command you
-already use answers from RAM, with no flags, no configuration and no database.
-Starting from nothing? The three steps below take you there.
+That writes the snapshots and bakes the core, reading your database one last
+time. Every command you already use then answers from RAM, with no flags and no
+configuration. Starting from nothing? The three steps below take you there.
 
 ## Get it running
 
-Two steps: get ichiran working, then turn on the fast path.
+Three steps: get the pieces in place, run one setup command, then everything runs
+from RAM. PostgreSQL appears once below, as somewhere to read the dictionary out
+of. Nothing here leaves you serving from it.
 
-### 1. Install ichiran
+### 1. Get the pieces in place
 
 **Docker, nothing to install.** Downloads a prepared JMdictDB dump, so you never
 build the dictionary yourself.
@@ -44,31 +46,26 @@ build the dictionary yourself.
 git clone https://github.com/GolyBidoof/ichiran-ram.git
 cd ichiran-ram
 docker compose build          # a few minutes the first time
-docker compose up             # restores a 4.7GB database, then idles
+docker compose up             # restores a 4.7GB database once, then idles
 ```
 
-The first `up` is the slow one. When it prints "All set, awaiting commands":
-
-```sh
-docker exec -it ichiran-main-1 ichiran-cli -i "一覧は最高だぞ"
-docker exec -it ichiran-main-1 test-suite        # the test suite
-docker exec -it ichiran-main-1 ichiran-sbcl      # a Lisp REPL
-```
+The first `up` is the slow one, and it is done when it prints "All set, awaiting
+commands".
 
 **Local SBCL and PostgreSQL.** Install SBCL, [quicklisp](https://www.quicklisp.org/beta/)
 and PostgreSQL 16, then:
 
 ```sh
 ln -s "$PWD" "$HOME/quicklisp/local-projects/ichiran"
-cp settings.lisp.template settings.lisp   # fill in your database connection
+cp settings.lisp.template settings.lisp   # database connection, used to build
 ```
 
 Create the database from the [upstream dump](https://github.com/tshatrov/ichiran/releases)
 (quick) or with `(ichiran/maintenance:full-init)` (hours), then run
-`(ichiran/dict:init-suffixes t)` and `(ichiran/test:run-all-tests)`. The scripts
-in `scripts/` go through `scripts/sbcl-wrapped`, which keeps all SBCL and
-quicklisp state inside the checkout, finds SBCL on your `PATH` (or take
-`SBCL=/path/to/sbcl`), and looks for quicklisp in `local-env/quicklisp` first.
+`(ichiran/dict:init-suffixes t)`, which builds the suffix cache and must not be
+skipped. The scripts in `scripts/` go through `scripts/sbcl-wrapped`, which keeps
+all SBCL and quicklisp state inside the checkout, finds SBCL on your `PATH` (or
+take `SBCL=/path/to/sbcl`), and looks for quicklisp in `local-env/quicklisp` first.
 
 ### 2. Turn on the fast path
 
@@ -87,9 +84,20 @@ a few minutes. Running it again reuses what is there and takes seconds, and
 `FORCE=1` rebuilds from scratch.
 
 On a 16GB machine the full dictionary needs about 16GB of memory, so the setup
-refuses and tells you to use `PRESET=lite`. Inside the docker container, run it
-from the repo directory there and it finds the `pg` service by itself; give
-Docker Desktop at least 8GB first.
+refuses and tells you to use `PRESET=lite`.
+
+**From here, PostgreSQL is optional.** The core never opens a connection, which
+is what the wrong-password test at the end of the build proves. The snapshot path
+keeps a connection for the few lookups the RAM layer does not cover yet, so it
+wants a database around; bake the core if you want to stop the server entirely.
+
+In the docker container it is the same, in one command, and it finds the `pg`
+service by itself. Give Docker Desktop at least 8GB of memory first:
+
+```sh
+docker exec -it ichiran-main-1 bash -lc \
+  'cd /root/quicklisp/local-projects/ichiran && ./scripts/ram-setup.sh'
+```
 
 ### 3. Use it, from RAM
 
@@ -98,12 +106,15 @@ Docker Desktop at least 8GB first.
 ./scripts/serve-system.sh                     # one text per line, parallel, no DB
 ```
 
-Nothing else changes. No flags, no environment variables, no arguments. The CLI
-prints which backend it chose on stderr, `ICHIRAN_BACKEND=db` or `=ram` forces
-either one, and `docker exec -it ichiran-main-1 ichiran-cli -i "text"` works the
-same as before. If you would rather not bake a core, `./scripts/build-snapshot.sh`
-plus `./scripts/serve-snapshot.sh` gives the same per-line speed and boots in
-about 8.5 seconds instead of about 1.3.
+Nothing else changes. No flags, no environment variables, no arguments. Inside
+the container, `docker exec -it ichiran-main-1 ichiran-cli -i "text"` answers from
+the core the same way, `test-suite` runs the test suite, and `ichiran-sbcl` opens
+a Lisp REPL. The CLI prints which backend it chose on stderr, and
+`ICHIRAN_BACKEND=ram` pins it to RAM.
+
+If you would rather not bake a core at all, `./scripts/build-snapshot.sh` plus
+`./scripts/serve-snapshot.sh` gives the same per-line speed and boots in about
+8.5 seconds instead of about 1.3.
 
 The servers read one text per line on stdin and write one result per line on
 stdout, in the same order:
@@ -193,6 +204,10 @@ The CLI is upstream's, unchanged, plus one new flag:
 | `./scripts/ichiran-cli ...` | the same CLI, routed to the core once built |
 | `./scripts/ram-cli.sh ...` | the same, with the core required rather than preferred |
 
+Use `./scripts/ichiran-cli`, or put `scripts/` on your `PATH`, because a bare
+`ichiran-cli` binary is upstream's and goes straight to PostgreSQL. In the
+container, `ichiran-cli` is already routed through the dispatcher for you.
+
 **Lisp API.** Unchanged. `ichiran:romanize`, `ichiran:romanize*`,
 `ichiran:init-all-caches`, `ichiran/dict:init-suffixes` and the rest keep their
 names, arguments and return values. To opt in from your own process:
@@ -209,9 +224,11 @@ names, arguments and return values. To opt in from your own process:
 
 ## Upgrading from ichiran
 
-**Short answer: change nothing.** The commands, the flags and the API are the
-same, and every fast path sits behind a flag that defaults to off, so a stock
-checkout still talks to PostgreSQL and still matches the recorded baseline.
+**Short answer: change nothing in your code.** The commands, the flags and the
+API are the same. Add `./scripts/ram-setup.sh` and those same commands start
+answering from RAM. Every fast path sits behind a flag that defaults to off, so a
+stock checkout still talks to PostgreSQL and still matches the recorded baseline,
+which is what makes moving over safe rather than a leap of faith.
 
 | What you run today | After | Change |
 | --- | --- | --- |
