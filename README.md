@@ -34,9 +34,8 @@ what the numbers are, and how the output is verified.
 ## Setup
 
 The command above does all of this. It installs quicklisp if you do not have it,
-downloads the published dictionary
-(1.9GB, SHA256 checked), bakes a serving core, and smoke-tests it by romanizing a
-sentence. Expect a few minutes the first time; running it again reuses everything
+downloads the published dictionary (1.9GB, SHA256 checked), bakes a serving core,
+and smoke-tests it by romanizing a sentence. Expect a few minutes the first time; running it again reuses everything
 and takes seconds, and `FORCE=1` rebuilds from scratch.
 
 Then, from RAM, with nothing else running:
