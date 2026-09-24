@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **The README opening was rewritten in a plainer voice.** It now names ichiran as
+  the analyzer behind ichi.moe, explains the cost as one habit rather than as an
+  architecture, and makes the case in claims with the receipts next to them: the
+  whole dictionary in 8.1GB, a 469MB file answering in about a second, 18,939
+  lines in 2.3 seconds instead of about 17 minutes, nothing to run beside it. The
+  section formerly called "what this unlocks" is now "what you get" and reads as
+  consequences rather than bullet points, and it points at the setup script's own
+  deliberate wrong-password test as the reason to believe the core needs no
+  database. Verification gained a line about why a fast wrong answer is worth
+  nothing, and the requirements section states the trade plainly.
 - **Throughput on the third-party samples is now in the README**, with totals as
   well as per-line cost, the samples described rather than named, and the
   database totals for the long ones scaled by characters from measured slices.
@@ -20,7 +30,7 @@
   0.28 SQL queries per line instead of 17.12, no database at runtime, 8.1GB of
   heap for the whole dictionary, a 469MB core ready in about a second, and the
   byte-identical guarantee stated where it is first read. It gains badges, a
-  "what this unlocks" section, and the numbers table extended with the query and
+  section on what the speed is worth, and the numbers table extended with the query and
   memory axes. The GitHub description was rewritten and the repository had no
   topics at all; it now carries twenty. `docs/WHY-FORK.md` was rewritten to match
   the current numbers and to say who the fork is for.

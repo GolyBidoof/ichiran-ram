@@ -1,8 +1,7 @@
 # Ichiran RAM
 
-**Japanese word segmentation and romanization, with the whole dictionary in RAM.**
-Same answers, same commands, about 40 times faster per line, and no database while
-it serves.
+**The entire Japanese dictionary in RAM: about 40 times faster, and no database
+running.**
 
 [![Output](https://img.shields.io/badge/output-byte--identical-brightgreen)](#verification)
 [![Tests](https://img.shields.io/badge/tests-820%20assertions%2C%200%20failed-brightgreen)](#verification)
@@ -11,17 +10,22 @@ it serves.
 [![Database](https://img.shields.io/badge/database-not%20required-blue)](#option-c-turn-on-the-fast-path)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-Ichiran is a Japanese tokenizer, word segmenter and morphological analyzer that
-adds readings, romaji and dictionary glosses to Japanese text, powered by
-[JMdictDB](http://edrdg.org/~smg/). Upstream ichiran asks PostgreSQL for every
-word, reading and meaning while it analyzes a sentence, so a single sentence
-costs thousands of database queries and every one of them is on the critical
-path.
+Ichiran is the Japanese tokenizer and morphological analyzer behind
+[ichi.moe](http://ichi.moe). Hand it unbroken Japanese and it decides where the
+words are, then gives you the reading, the furigana, the romaji and the JMdict
+gloss for every piece. Segmentation is the hard part, and ichiran is good at it.
 
-This fork loads those same tables into RAM once and answers from memory. It can
-also bake the analyzer and the dictionary into one file that is ready in about a
-second and needs no database, no connection string and no server. The output is
-byte-identical to the database path, and three gates check that on every change.
+It has one expensive habit. Every word it looks at becomes questions for
+PostgreSQL, asked one after another while you wait: this reading, that
+conjugation, these senses, those glosses. A sentence costs thousands of queries.
+A subtitle file costs millions. That is what makes ichiran feel slow, and it says
+nothing about the analysis. It is about where the dictionary lives.
+
+This fork moves the dictionary. The same JMdict tables load into 8.1GB of RAM
+once, the analyzer reads them from memory, and the database stops mattering. Bake
+it and you get a single 469MB file that answers in about a second with no
+PostgreSQL, no connection string, no server and no network. The output is
+byte-identical to the database path, and three gates check that on every commit.
 
 Upstream project: [tshatrov/ichiran](https://github.com/tshatrov/ichiran) by
 Timofei Shatrov. This fork is maintained by
@@ -40,16 +44,18 @@ Timofei Shatrov. This fork is maintained by
 | Memory held while serving | the database's own | 8.1 GB | 8.1 GB |
 | Output | baseline | byte-identical | byte-identical |
 
-Same machine, `romanize` per line, best of three runs. See
+Same machine, `romanize` per line, best of three runs. The middle column is the
+snapshot, the third is the same dictionary baked into one file. See
 [Verification](#verification) for how the equality is checked, and
 [docs/PERFORMANCE-HISTORY.md](docs/PERFORMANCE-HISTORY.md) for every measurement
-and for the ideas that were tried and rejected.
+along with the ideas that were tried and rejected.
 
-### Throughput on real text
+### On real text
 
-Totals and per-line cost, whole sample in one process. These are third-party
-samples, kept out of the repository for copyright reasons, so they are described
-rather than named.
+Four samples of real Japanese, none of them ours. They are described rather than
+named, because they are copyrighted and deliberately absent from this repository.
+Each row is a whole sample in one process, so the totals are what you would
+actually sit and wait for.
 
 | Sample | Lines | Characters | Database path | RAM snapshot | Baked core |
 | --- | --- | --- | --- | --- | --- |
@@ -59,48 +65,62 @@ rather than named.
 | magazine sample | 18,939 | 335,008 | about 17 min | 25.3 s (1.33 ms) | **24.6 s** (1.30 ms) |
 
 The database totals for the last three are scaled by characters from measured
-slices (2,000, 400 and 2,905 lines, at 19.0, 95.3 and 55.1 ms per line), because
-running the whole sample through PostgreSQL takes minutes rather than seconds.
+slices, because nobody wants to wait seventeen minutes to publish a table. The
+slices were 2,000, 400 and 2,905 lines at 19.0, 95.3 and 55.1 ms per line.
 
-Across 10 worker threads the magazine sample analyses in 2.3 s, 0.121 ms per
-line, 12.8x. End to end, the parallel server returns all 18,939 lines in 5.8 s
-including startup and writing the JSON, and no analyzed line came back empty
-(the 476 blank outputs in that run correspond to the 473 blank input lines).
+Ten worker threads take the magazine sample to 2.3 seconds of analysis, 0.121 ms
+per line, 12.8x. End to end, the parallel server returns all 18,939 lines in 5.8
+seconds including startup and writing the JSON. Nothing analyzed came back empty;
+the 476 blank lines in that output are the 473 blank lines in the input.
 
-Upstream measured against this fork on identical text: **49.77 against 49.76 ms**
-per line on the golden corpus, **87.67 against 81.38** on the visual-novel
-prologue, **16.68 against 19.66** on a manga slice. The two database paths are
-within a few percent of each other in both directions, so the speed here comes
-from the RAM layer and not from a faster database path. Unmodified upstream was
-cloned from GitHub and run against the same PostgreSQL for that comparison.
+We also ran unmodified upstream ichiran against the same database on the same
+text, because a comparison you cannot check is just marketing. **49.77 against
+49.76 ms** per line on the golden corpus, **87.67 against 81.38** on the
+visual-novel prologue, **16.68 against 19.66** on a manga slice, **54.84 against
+52.59** on a magazine slice. Dead even, in both directions. The database path is
+not where the speed comes from. The RAM layer is, and you are welcome to
+disbelieve this table until you rerun it.
 
 Per-line cost tracks line length more than corpus size: the manga sample averages
-7.7 characters per line against 17.7 for the magazine, which is most of the
-difference between 0.38 and 1.30 ms per line on the core.
+7.7 characters per line against 17.7 for the magazine, which is most of the gap
+between 0.38 and 1.30 ms per line on the core.
 
-**If you already use ichiran, nothing changes but the speed.** The command, the
-flags, the Lisp API and the output stay exactly the same. Every fast path sits
-behind a flag that defaults to off, so with the flags off every lookup goes to
-PostgreSQL and the output matches the recorded baseline.
+## What you get
 
-## What this unlocks
+**A corpus that used to cost a coffee break now costs a blink.** Those 18,939
+lines take about 17 minutes on the database path. Through the parallel RAM server
+they take 2.3 seconds, and every analyzed line came back with an answer.
 
-- **Batch work at a new scale.** 18,939 lines of Japanese took about 16 minutes
-  on the database path and 2.3 seconds with 10 threads, with no empty results.
-- **Nothing to run.** A baked core is one 469MB file: no PostgreSQL, no
-  connection strings, no migrations, no vacuuming, nothing to keep alive.
-- **One process, many lines.** A text per line in, one romanization per line out,
-  in order, with the dictionary already loaded.
-- **Laptops and offline machines.** The whole dictionary is 8.1GB of heap, which
-  a 16GB machine holds, and no network is involved.
-- **Japanese text for other tools.** Subtitle pipelines, OCR output, Anki card
-  mining, corpus analysis and preparing Japanese for language models, all of
-  which used to be dominated by dictionary round trips.
+**Nothing left to keep alive.** No PostgreSQL, no connection strings, no
+migrations, no vacuum, no port to open. One 469MB file, read once, answering for
+as long as the process lives. Drop the core into a container and nothing else
+needs to run beside it.
+
+**A way to check that the database is really gone.** The setup script finishes by
+pointing the core at a database with a deliberately wrong password. If the
+romanization still comes back, the core is genuinely self-contained. That test
+runs at the end of every build, and it is why the numbers here can be trusted
+without taking anyone's word for it.
+
+**The whole dictionary, offline.** All of JMdict fits in 8.1GB of heap, which a
+16GB laptop carries comfortably. Useful on trains, on planes, and on the machine
+that has no database server and never will.
+
+**Your existing tools, just faster.** A text per line in, a romanization per line
+out, in order, dictionary already warm. Subtitle pipelines, OCR output, Anki card
+mining, corpus work, and the preprocessing pass before Japanese goes into a
+language model. All of it used to be paced by dictionary round trips.
+
+**And no migration.** If you already run ichiran, the command does not change.
+Same binary name, same flags, same Lisp API, same output. Run the setup and the
+plain command starts answering from RAM. Every fast path sits behind a flag that
+defaults to off, so a stock checkout still talks to PostgreSQL and still matches
+the recorded baseline.
 
 ## Contents
 
 - [The numbers](#the-numbers)
-- [What this unlocks](#what-this-unlocks)
+- [What you get](#what-you-get)
 - [Quick start](#quick-start)
   - [Option A: Docker, nothing to install](#option-a-docker-nothing-to-install)
   - [Option B: local SBCL and PostgreSQL](#option-b-local-sbcl-and-postgresql)
@@ -380,8 +400,9 @@ lines, instead of starting a fresh Lisp for every sentence.
 
 ## Verification
 
-The claim "same answers" is checked three ways, and all three are expected to
-pass before anything ships.
+Every "same answers" claim in this file is checked three ways, and all three have
+to pass before anything ships. This is the part of the project that gets the most
+attention, because a fast wrong answer is worth nothing.
 
 | Gate | Command | Passes when |
 | --- | --- | --- |
@@ -418,6 +439,10 @@ against a fixed baseline file instead of running the database twice.
 Serving from RAM holds about 8.1GB of dictionary in the heap, so 16GB is the
 practical floor for the full dictionary. `save-lisp-and-die` needs roughly twice
 the dictionary size while writing a core, which is why baking wants headroom.
+
+The trade is easy to state. The database path costs you a PostgreSQL server and a
+long wait on every batch. The RAM path costs you 8.1GB of memory, and a 16GB
+laptop pays that bill once and then stops noticing.
 
 Build times on the reference machine (Apple Silicon): a few minutes for the
 snapshot and a few minutes for a core, and neither needs to be repeated unless
