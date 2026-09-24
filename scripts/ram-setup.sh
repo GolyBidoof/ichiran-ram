@@ -7,8 +7,11 @@
 #   1. checks that SBCL, quicklisp and the database are reachable
 #   2. writes the dictionary snapshots          (local-env/*.snap)
 #   3. bakes the serving core                   (local-env/ichiran-serving.core)
-#   4. proves it works by romanizing a sentence from the core, with deliberately
-#      wrong database credentials, so a silent fallback to PostgreSQL fails
+#   4. smoke-tests it by romanizing a sentence from the core
+#
+# The database is needed here and only here: it is read once, while the snapshots
+# are built. The core answers with no database at all, which is checked by
+# stopping PostgreSQL and looking for "db":false in the server's ready line.
 #
 # Afterwards the normal commands pick all of this up automatically:
 #   ./scripts/serve-system.sh              # stdin -> romanize, parallel, no DB
@@ -132,7 +135,7 @@ if [ ! -f "$CORE_OUT" ]; then
   say "  serve it with ./scripts/serve-snapshot.sh"
   exit 0
 fi
-say "  romanizing one sentence from the core with wrong database credentials"
+say "  romanizing one sentence from the core to check that it boots and answers"
 out="$(ICHIRAN_DB_USER=ram_setup_self_test ICHIRAN_DB_PASSWORD=wrong \
        CORE="$CORE_OUT" ./scripts/ram-cli.sh "一覧は最高だぞ" 2>&1)" || {
   printf '%s\n' "$out" >&2
@@ -144,6 +147,10 @@ case "$out" in
   *) printf '%s\n' "$out" >&2
      die "the core answered, but not with the expected romanization" ;;
 esac
+say "  note: this is a smoke test. The core reads its connection from the image,"
+say "  not from the environment, so pointing it at wrong credentials proves"
+say "  nothing. To prove it needs no database, stop PostgreSQL and watch for"
+say "  {\"ready\":true,...,\"db\":false}; see Verification in the README."
 
 # --------------------------------------------------------------------- summary
 step "done"

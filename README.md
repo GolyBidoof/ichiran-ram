@@ -77,19 +77,19 @@ RAM:
 ```
 
 Wait for it to finish. It checks SBCL, quicklisp and your database, writes the
-dictionary snapshots (1.6GB), bakes a serving core (469MB), and proves the result
-works by romanizing a sentence with deliberately wrong database credentials, so a
-silent fallback to PostgreSQL fails the setup instead of passing quietly. Expect
-a few minutes. Running it again reuses what is there and takes seconds, and
-`FORCE=1` rebuilds from scratch.
+dictionary snapshots (1.6GB), bakes a serving core (469MB), and smoke-tests the
+result by romanizing a sentence from the core. Expect a few minutes. Running it
+again reuses what is there and takes seconds, and `FORCE=1` rebuilds from scratch.
 
 On a 16GB machine the full dictionary needs about 16GB of memory, so the setup
 refuses and tells you to use `PRESET=lite`.
 
-**From here, PostgreSQL is optional.** The core never opens a connection, which
-is what the wrong-password test at the end of the build proves. The snapshot path
-keeps a connection for the few lookups the RAM layer does not cover yet, so it
-wants a database around; bake the core if you want to stop the server entirely.
+**From here, PostgreSQL is optional, and the core does not need it at all.** With
+the server stopped, the core still answers, its ready line reports `"db":false`,
+and the output is byte-identical to the run with the database up: measured over
+the 382-line golden corpus and a 7,278-line third-party sample. The snapshot path
+is the one that keeps a connection, for the few lookups the RAM layer does not
+cover yet, so bake the core if you want to stop the server entirely.
 
 In the docker container it is the same, in one command, and it finds the `pg`
 service by itself. Give Docker Desktop at least 8GB of memory first:
@@ -270,6 +270,14 @@ path, because the other gates cannot see the RAM code at all. Each RAM load also
 prints `MEMDICT-VERIFY-OK <table> ram=N db=N` to check its row counts; that gate
 exists because a paging bug once loaded 1.55M of 2.5M rows in silence and the
 analyzer answered anyway, with wrong answers.
+
+**No database, checked rather than asserted.** Stop PostgreSQL, serve a corpus
+through the core, and compare it against the same run with the database up. The
+ready line reports `"db":false` and the output is byte-identical, which is how the
+independence claim above was established, over the golden corpus and a 7,278-line
+sample. Pointing the core at wrong credentials does *not* demonstrate this: the
+connection is baked into the image and the environment is ignored, so a
+wrong-password run only proves that the core answers.
 
 One honest caveat: the database path is not fully deterministic on a single
 knife-edge sentence where two segmentations score almost identically. That is an
