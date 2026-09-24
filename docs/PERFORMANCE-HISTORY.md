@@ -181,25 +181,53 @@ plausible idea that a future reader would otherwise try again.
 
 ## 9. Where it ended up
 
-All measured on the same machine, `romanize` per line, best of three.
+All measured on the same machine, `romanize` per line, best of three, whole
+sample in one process. The database column is **this fork's** database path, and
+the same experiment against unmodified upstream ichiran is in the comparison
+below. Totals are given with the per-line cost.
 
 | Corpus | Lines | Database | RAM | Baked core |
 | --- | --- | --- | --- | --- |
-| golden | 382 | 51.74 ms | 1.27 ms | 1.27 ms |
+| golden | 382 | 51.74 ms (19.0 s) | 1.27 ms (0.49 s) | 1.27 ms (0.49 s) |
 | visual-novel sample, batch 1 | 39 | 53.87 ms | 1.51 ms | 1.54 ms |
 | visual-novel sample, batch 2 | 84 | 67.83 ms | 1.66 ms | 1.91 ms |
 
 Time to the first answer, which is what a caller actually waits for: golden
 23.03s, 0.97s, **0.54s**; the core is ready in a flat 1.27s because it loads
-nothing. On the 350k-character magazine sample the database is out of range (about 16 minutes at
-52 ms per line), while RAM and core take 23.8s and 27.3s serially, and 2.29s and
-2.31s with 10 workers, which is 0.121 ms per line and roughly **430x the database
+nothing. On the 350k-character magazine sample the database path needs about 17
+minutes (18,939 lines at the 55.12 ms per line measured over a 2,905-line slice),
+while RAM and core take 23.8s to 25.3s and 24.6s to 27.3s serially, and 2.29s and
+2.31s with 10 workers, which is 0.121 ms per line and roughly **450x the database
 rate**.
 
 Serial RAM and core are indistinguishable on that corpus: single passes came out
 1.543 and 1.325 ms per line, so the run-to-run spread is about 15% and the
 best-of-three ordering between them means nothing. The core's advantage is
 startup, not throughput.
+
+**Upstream against this fork, same text and same PostgreSQL.** The database paths
+are not where this fork's speed comes from, and that is worth knowing before
+quoting a comparison. Unmodified upstream ichiran (`ea95833`, cloned from GitHub,
+pointed at the same database) and this fork were run through the same harness on
+identical slices:
+
+| Sample | Lines | Upstream | This fork | Ratio |
+| --- | --- | --- | --- | --- |
+| golden | 382 | 49.77 ms (19.0 s) | 49.76 ms (19.0 s) | 1.00 |
+| visual-novel prologue | 82 | 87.67 ms (7.2 s) | 81.38 ms (6.7 s) | 0.93 |
+| manga slice from the middle | 318 | 16.68 ms (5.3 s) | 19.66 ms (6.3 s) | 1.18 |
+| magazine slice from the middle | 398 | 54.84 ms (21.8 s) | 52.59 ms (20.9 s) | 0.96 |
+
+The two are within run-to-run range of each other on every sample, in both
+directions, so the honest statement is that this fork's database path is
+equivalent to upstream's rather than faster, and that everything in the tables
+above comes from the RAM layer. The fork's baseline is also dated after
+upstream's newest commit, so it already contains upstream's own fixes.
+
+One measurement note from that exercise: the upstream magazine slice died at a
+4GB heap and completed at 14GB, while the fork's database path completed the same
+slice at 4GB. Heap size has to be matched before comparing anything, and a run
+that dies is not a data point.
 
 ## 10. How the numbers were kept honest
 

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Throughput on the third-party samples is now in the README**, with totals as
+  well as per-line cost, the samples described rather than named, and the
+  database totals for the long ones scaled by characters from measured slices.
+- **The database path was measured against unmodified upstream ichiran** on
+  identical text (`ea95833`, cloned from GitHub, same PostgreSQL, same harness):
+  49.77 against 49.76 ms per line on the golden corpus, 87.67 against 81.38 on a
+  visual-novel prologue, 16.68 against 19.66 on a manga slice, and 54.84 against
+  52.59 on a magazine slice. The two paths are equivalent in both directions, so
+  the README no longer presents the database column as the source of the speed,
+  and docs/PERFORMANCE-HISTORY.md records the whole comparison.
+- Corrected the magazine database figure to about 17 minutes, from the 55.12 ms
+  per line measured over a 2,905-line slice, replacing an earlier extrapolation
+  from a 300-line slice whose lines were atypically short.
 - **README and repository metadata reworked for discovery.** The top of the
   README now leads with what the fork is and what it changes: about 40x per line,
   0.28 SQL queries per line instead of 17.12, no database at runtime, 8.1GB of

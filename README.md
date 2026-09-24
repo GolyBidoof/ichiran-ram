@@ -29,7 +29,7 @@ Timofei Shatrov. This fork is maintained by
 
 ## The numbers
 
-| | PostgreSQL (upstream) | RAM snapshot | Baked core |
+| | Database path | RAM snapshot | Baked core |
 | --- | --- | --- | --- |
 | One line, warm (382-line corpus) | 51.7 ms | **1.27 ms** | **1.27 ms** |
 | One line, 10 worker threads (18,939 lines) | not measured | **0.121 ms** | 0.122 ms |
@@ -44,6 +44,39 @@ Same machine, `romanize` per line, best of three runs. See
 [Verification](#verification) for how the equality is checked, and
 [docs/PERFORMANCE-HISTORY.md](docs/PERFORMANCE-HISTORY.md) for every measurement
 and for the ideas that were tried and rejected.
+
+### Throughput on real text
+
+Totals and per-line cost, whole sample in one process. These are third-party
+samples, kept out of the repository for copyright reasons, so they are described
+rather than named.
+
+| Sample | Lines | Characters | Database path | RAM snapshot | Baked core |
+| --- | --- | --- | --- | --- | --- |
+| visual-novel prologue | 82 | 1,915 | 6.7 s (81.4 ms) | **0.16 s** (1.98 ms) | 0.16 s (1.97 ms) |
+| manga-magazine sample | 7,278 | 55,912 | about 2.3 min | 3.0 s (0.41 ms) | **2.7 s** (0.38 ms) |
+| novel-prologue sample | 1,324 | 34,147 | about 2 min | **3.0 s** (2.29 ms) | 3.2 s (2.44 ms) |
+| magazine sample | 18,939 | 335,008 | about 17 min | 25.3 s (1.33 ms) | **24.6 s** (1.30 ms) |
+
+The database totals for the last three are scaled by characters from measured
+slices (2,000, 400 and 2,905 lines, at 19.0, 95.3 and 55.1 ms per line), because
+running the whole sample through PostgreSQL takes minutes rather than seconds.
+
+Across 10 worker threads the magazine sample analyses in 2.3 s, 0.121 ms per
+line, 12.8x. End to end, the parallel server returns all 18,939 lines in 5.8 s
+including startup and writing the JSON, and no analyzed line came back empty
+(the 476 blank outputs in that run correspond to the 473 blank input lines).
+
+Upstream measured against this fork on identical text: **49.77 against 49.76 ms**
+per line on the golden corpus, **87.67 against 81.38** on the visual-novel
+prologue, **16.68 against 19.66** on a manga slice. The two database paths are
+within a few percent of each other in both directions, so the speed here comes
+from the RAM layer and not from a faster database path. Unmodified upstream was
+cloned from GitHub and run against the same PostgreSQL for that comparison.
+
+Per-line cost tracks line length more than corpus size: the manga sample averages
+7.7 characters per line against 17.7 for the magazine, which is most of the
+difference between 0.38 and 1.30 ms per line on the core.
 
 **If you already use ichiran, nothing changes but the speed.** The command, the
 flags, the Lisp API and the output stay exactly the same. Every fast path sits
