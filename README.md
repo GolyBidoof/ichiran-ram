@@ -39,6 +39,19 @@ of. Nothing here leaves you serving from it.
 
 ### 1. Get the pieces in place
 
+**No database, no build: download the dictionary.** The published core is a
+469MB file that answers with no database running. Grab it and go:
+
+```sh
+git clone https://github.com/GolyBidoof/ichiran-ram.git
+cd ichiran-ram
+./scripts/fetch-dictionary.sh --core
+```
+
+That checks a SHA256 sum and unpacks into `local-env/`. Skip to step 3. The core
+is an SBCL image, so it only loads on the platform it was built for, which is
+macOS arm64 with SBCL 2.6.8; on anything else, use one of the two builds below.
+
 **Docker, nothing to install.** Downloads a prepared JMdictDB dump, so you never
 build the dictionary yourself.
 
@@ -90,6 +103,10 @@ and the output is byte-identical to the run with the database up: measured over
 the 382-line golden corpus and a 7,278-line third-party sample. The snapshot path
 is the one that keeps a connection, for the few lookups the RAM layer does not
 cover yet, so bake the core if you want to stop the server entirely.
+
+Building them is the part that still reads PostgreSQL, and only for three data
+sets that are not in the snapshot format yet: the is-arch flags, the restricted
+readings, and the counters. Everything else comes out of the dictionary tables.
 
 In the docker container it is the same, in one command, and it finds the `pg`
 service by itself. Give Docker Desktop at least 8GB of memory first:
@@ -258,18 +275,22 @@ because here the snapshot is the dictionary.
 Every "same answers" claim here is checked three ways, and all three have to pass
 before anything ships, because a fast wrong answer is worth nothing.
 
-| Gate | Command | Passes when |
-| --- | --- | --- |
-| Unit and behavior tests | `./scripts/parity.sh` | prints `PARITY_OK` (820 assertions, 0 failures) |
-| Database output baseline | `./scripts/golden-diff.sh` | prints `GOLDEN_DIFF_OK` |
-| RAM output vs database baseline | `./scripts/ram-parity.sh` | prints `RAM_PARITY_OK` |
+| Gate | Command | Needs a database | Passes when |
+| --- | --- | --- | --- |
+| RAM output vs database baseline | `./scripts/ram-parity.sh` | no | prints `RAM_PARITY_OK` |
+| Unit and behavior tests | `./scripts/parity.sh` | yes | prints `PARITY_OK` (820 assertions, 0 failures) |
+| Database output baseline | `./scripts/golden-diff.sh` | yes | prints `GOLDEN_DIFF_OK` |
 
-`ram-parity.sh` is the important one: it runs the whole golden corpus through the
-RAM path and compares it byte for byte with a baseline produced by the database
-path, because the other gates cannot see the RAM code at all. Each RAM load also
-prints `MEMDICT-VERIFY-OK <table> ram=N db=N` to check its row counts; that gate
-exists because a paging bug once loaded 1.55M of 2.5M rows in silence and the
-analyzer answered anyway, with wrong answers.
+`ram-parity.sh` is the primary gate and the only one a RAM-only install can run.
+It pushes the whole golden corpus through the RAM path and compares it byte for
+byte with a baseline produced by the database path. The other two drive the
+analyzer against PostgreSQL by design, so with no database reachable they print
+`PARITY_SKIPPED` or `GOLDEN_DIFF_SKIPPED` and exit 0 instead of failing. Nothing
+passes silently: a skip says `SKIPPED`, which is a different word from `OK`.
+
+Each RAM load also prints `MEMDICT-VERIFY-OK <table> ram=N db=N` to check its row
+counts; that gate exists because a paging bug once loaded 1.55M of 2.5M rows in
+silence and the analyzer answered anyway, with wrong answers.
 
 **No database, checked rather than asserted.** Stop PostgreSQL, serve a corpus
 through the core, and compare it against the same run with the database up. The

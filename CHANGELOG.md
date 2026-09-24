@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **The dictionary is published, so the fast path needs no database and no
+  build.** Release `dict-v1` carries the baked serving core (446MB compressed,
+  macOS arm64 with SBCL 2.6.8), the integer snapshot (294MB compressed, from
+  1.6GB raw) and the sense snapshot (8MB). `./scripts/fetch-dictionary.sh`
+  downloads them, checks SHA256 sums, unpacks into `local-env/` and resumes
+  interrupted downloads. The core is the only one of the three that needs no
+  database: with PostgreSQL stopped it reports `"db":false` and returns
+  byte-identical output. The snapshots still open a connection at boot for the
+  lookups the RAM layer does not cover yet, and the release notes say so.
+- **The two database gates retire themselves instead of failing.** `parity.sh`
+  and `golden-diff.sh` drive the analyzer against PostgreSQL by design, so with
+  no database reachable they now print `PARITY_SKIPPED` or
+  `GOLDEN_DIFF_SKIPPED` and exit 0, via the new `scripts/db-available.sh`, which
+  reads the same connection variables the Lisp does. `ram-parity.sh`, which
+  needs no database, is the primary gate and is listed first in the README. A
+  skip never reads as a pass: the word is `SKIPPED`, not `OK`.
+- **`ram-setup.sh` needs no database once the artifacts exist.** It notices an
+  existing core, says why the database is not needed, reuses the snapshots and
+  goes straight to the smoke test. Verified end to end with PostgreSQL stopped:
+  exit 0, self-test answered, database restarted afterwards.
+- **Documented what still reads PostgreSQL at build time**: the is-arch flags,
+  the restricted readings and the counters, which are not in the snapshot format
+  yet. That is the remaining work for a source build with no database, and it is
+  named in the README rather than left implicit.
 - **The README was cut from 532 lines to 322 and reordered around doing the
   thing.** "Get it running" is now the first section, three numbered steps:
   install ichiran (Docker or local SBCL), run `./scripts/ram-setup.sh`, then use

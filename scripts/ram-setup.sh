@@ -36,6 +36,13 @@ DB_USER="${ICHIRAN_DB_USER:-jmdict}"
 DB_PASS="${ICHIRAN_DB_PASSWORD:-password}"
 DB_NAME="${ICHIRAN_DB_NAME:-jmdict}"
 
+# A core that is already built means this run has nothing left that needs SQL.
+# The database is read to BUILD the artifacts; it is never read to use them.
+CORE_READY=0
+if [ -f "$CORE_OUT" ] && [ "${FORCE:-}" != "1" ] && [ "${SKIP_CORE:-}" != "1" ]; then
+  CORE_READY=1
+fi
+
 say() { printf '%s\n' "$*"; }
 step() { printf '\n== %s\n' "$*"; }
 die() { printf '\nram-setup: %s\n' "$*" >&2; exit 2; }
@@ -70,7 +77,9 @@ db_reachable() {
 }
 
 if [ "${SKIP_DB_CHECK:-}" != "1" ]; then
-  if command -v psql >/dev/null 2>&1; then
+  if [ "$CORE_READY" = 1 ]; then
+    say "  core already built at $CORE_OUT, so no database is needed for this run"
+  elif command -v psql >/dev/null 2>&1; then
     if db_reachable "$DB_HOST"; then
       say "  database $DB_NAME on $DB_HOST: ok"
     elif [ "$DB_HOST" = "localhost" ] && db_reachable pg; then

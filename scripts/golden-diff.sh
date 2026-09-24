@@ -2,7 +2,19 @@
 # golden-diff.sh - diff current romanize* behavior against the baseline snapshot.
 # Exit 0 = byte-identical to baseline (parity contract). Non-zero = drift.
 # Usage: golden-diff.sh
+#
+# The baseline it compares against was produced by the database path, so this gate
+# needs a database to regenerate the current side. With none reachable it skips.
+# The RAM path is covered by ram-parity.sh, which needs no database at all.
 cd "$(dirname "$0")/.." || exit 1
+
+if ! scripts/db-available.sh; then
+  echo "GOLDEN_DIFF_SKIPPED: no database reachable at ${ICHIRAN_DB_HOST:-localhost} (${ICHIRAN_DB_NAME:-jmdict})"
+  echo "GOLDEN_DIFF_SKIPPED: this gate regenerates database output by design."
+  echo "GOLDEN_DIFF_SKIPPED: the RAM path is covered by ./scripts/ram-parity.sh instead."
+  exit 0
+fi
+
 BASE="data/golden-corpus-baseline.json"
 CUR="$(mktemp /tmp/golden-current.XXXXXXXX)" || {
   echo "GOLDEN_DIFF_ERROR: mktemp failed"
